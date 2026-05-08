@@ -158,6 +158,7 @@ void ColdDripEngine::update() {
     // --- Air Purge 控制邏輯 ---
     if (_state == BREW_PURGING) {
         if (now - _purgeStartMs >= AIR_PURGE_DURATION_MS) {
+            _pumpOff();
             _airPumpOff();
             _state = BREW_COMPLETE;
             Serial.println("[ColdDrip] Air Purge 完成！");
@@ -239,14 +240,17 @@ void ColdDripEngine::stopBrew() {
 }
 
 void ColdDripEngine::startPurge() {
-    _pumpOff();  // 確保水泵關閉
+    // Air Purge: 氣泵提供空氣，水泵推動空氣通過管路
+    // 管路: 氣泵 → 閥C → 三通 → 閥B → 水泵 → 佈水器 → 粉槽
     _state = BREW_PURGING;
     _purgeStartMs = millis();
-    _airPumpOn_();
-    Serial.printf("[ColdDrip] Air Purge 啟動，持續 %d 秒\n", AIR_PURGE_DURATION_MS / 1000);
+    _pumpOn_();      // 水泵 ON：推動空氣通過管路
+    _airPumpOn_();   // 氣泵 ON：提供空氣來源
+    Serial.printf("[ColdDrip] Air Purge 啟動 (水泵+氣泵)，持續 %d 秒\n", AIR_PURGE_DURATION_MS / 1000);
 }
 
 void ColdDripEngine::stopPurge() {
+    _pumpOff();
     _airPumpOff();
     _state = BREW_COMPLETE;
     Serial.println("[ColdDrip] Air Purge 手動停止");

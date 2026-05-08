@@ -176,22 +176,22 @@ void updateMainPage() {
     tft.drawString(stateStr, 34, 38);
     
     // 幫浦/氣泵指示
-    if (st.pumpActive) {
-        tft.setTextColor(CD_WATER_BLUE);
-        tft.setTextSize(1);
-        tft.drawString("PUMP ON", 34, 60);
-        // 滴水動畫
-        UIComponents::drawDripIcon(&tft, 290, 36, animFrame);
-    } else if (st.airPumpActive) {
+    if (st.state == BREW_PURGING) {
+        // Purge 期間：水泵+氣泵同時運作
         tft.setTextColor(CD_AMBER);
         tft.setTextSize(1);
-        tft.drawString("AIR PUMP ON", 34, 60);
+        tft.drawString("PURGE: PUMP+AIR", 34, 60);
         // 顯示氣泵剩餘時間
         char purgeBuf[16];
         int purgeRemain = (st.purgeTotalMs - st.purgeElapsedMs) / 1000;
         if (purgeRemain < 0) purgeRemain = 0;
         sprintf(purgeBuf, "%ds left", purgeRemain);
         tft.drawString(purgeBuf, 140, 60);
+    } else if (st.pumpActive) {
+        tft.setTextColor(CD_WATER_BLUE);
+        tft.setTextSize(1);
+        tft.drawString("PUMP ON", 34, 60);
+        UIComponents::drawDripIcon(&tft, 290, 36, animFrame);
     } else if (st.state == BREW_RUNNING) {
         tft.setTextColor(CD_DARK_GRAY);
         tft.setTextSize(1);
