@@ -1,7 +1,7 @@
-# ☕ 冰滴咖啡機控制器 (Cold Drip Coffee Controller)
+# ☕ 冰滴咖啡機控制器 (Cold Drip Coffee Controller) v2.0
 
-> ESP32-CYD 驅動的 600ml / 6小時自動化冰滴咖啡系統
-> **全 5V 統一架構** — 無需升壓模組，電路精簡可靠
+> **ESP32-S3 驅動** ｜ 1.28" 圓形 LCD ｜ 實體旋鈕操作
+> **全 5V 統一架構** — 無需升壓模組，電路精簡可靠，腳位充足不需改裝。
 
 ## 📋 專案概述
 
@@ -9,18 +9,20 @@
 |------|------|
 | **目標產量** | 600ml / 6小時 |
 | **配置** | 左右並列雙槽結構（右側入水、左側萃取） |
-| **控制器** | ESP32 CYD (ESP32-2432S028) |
-| **電源架構** | 全 5V 統一供電（無升壓模組） |
-| **運作模式** | 完全離線，無需 WiFi |
-| **核心邏輯** | 間歇滴灌（預設每 60 秒啟動 2.5 秒） |
-| **完成後處理** | 自動 Air Purge 吹氣清掃管路 (30 秒) |
+| **控制器** | **ESP32-S3 DevKitC** |
+| **顯示器** | **1.28" 圓形 LCD (GC9A01)** |
+| **互動介面** | **EC11 旋轉編碼器 (實體控制)** |
+| **電源架構** | 全 5V 統一供電 |
+| **核心邏輯** | 間歇滴灌 + 自動 Air Purge |
 
 ## 🔧 BOM 表 (物料清單)
 
 | 類別 | 項目規格 | 用途 |
 |------|----------|------|
-| 控制器 | ESP32 CYD (ESP32-2432S028) | 系統大腦與資訊顯示 (5V) |
-| 水泵 | Kamoer NKP 蠕動幫浦 (**6V** / BPT管) | 精準抽水，5V 供電可運作 |
+| 控制器 | **ESP32-S3 DevKitC-1** | 系統核心 (建議 N8R8 或 N16R8) |
+| 顯示器 | **1.28" 圓形 LCD (GC9A01)** | 圓形介面資訊顯示 |
+| 旋鈕 | **EC11 旋轉編碼器** | 核心控制與參數調整 |
+| 水泵 | Kamoer NKP 蠕動幫浦 (**6V**) | 抽水動力 (5V 供電) |
 | 氣泵 | **5V** 小型 Air Pump | 萃取後 Air Purge 吹氣清掃 |
 | 電源 | Eneloop Pro AA 電池 x 4 (串聯) | 穩定、耐低溫電力來源 (4.8~5.8V) |
 | 降壓件 | DC-DC 降壓模組 (降至 **5V**) | 統一供應所有元件 |
@@ -41,15 +43,22 @@
 
 ### GPIO 分配
 
-| GPIO | 功能 | 方向 | 接往 |
+| GPIO | 功能 | 介面 | 接往 |
 |------|------|------|------|
-| **GPIO27** | 水泵控制 | OUTPUT | D4184 MOSFET #1 SIG |
-| **GPIO22** | 氣泵控制 (Air Pump) | OUTPUT | D4184 MOSFET #2 SIG |
-| **GPIO16** | Encoder CLK | INPUT | EC11 CLK (需拆除 RGB LED Green) |
-| **GPIO17** | Encoder DT | INPUT | EC11 DT (需拆除 RGB LED Blue) |
-| **GPIO35** | 電壓監測 / Encoder SW | INPUT | 分壓電阻點 / EC11 按鈕 (共用) |
-| 5V | 電源輸入 | - | DC-DC 降壓 VOUT+ |
-| GND | 共地 | - | 所有模組共地匯流排 |
+| **GPIO 1** | Encoder CLK | INPUT | EC11 CLK |
+| **GPIO 2** | Encoder DT | INPUT | EC11 DT |
+| **GPIO 3** | Encoder SW | INPUT | EC11 SW (按鈕) |
+| **GPIO 4** | 水泵控制 | OUTPUT | D4184 #1 SIG |
+| **GPIO 5** | 氣泵控制 | OUTPUT | D4184 #2 SIG |
+| **GPIO 6** | 電壓監測 | ADC | 分壓電阻中點 |
+| **GPIO 10** | LCD SCL | SPI SCK | GC9A01 SCL |
+| **GPIO 11** | LCD SDA | SPI MOSI | GC9A01 SDA |
+| **GPIO 12** | LCD RES | RESET | GC9A01 RES |
+| **GPIO 13** | LCD DC | DATA/CMD | GC9A01 DC |
+| **GPIO 14** | LCD CS | CHIP SEL | GC9A01 CS |
+| **GPIO 15** | LCD BLK | BACKLIGHT | GC9A01 BLK |
+| 5V | 電源輸入 | Power | DC-DC VOUT+ |
+| GND | 共地 | GND | 所有模組共地 |
 
 ### 接線重點 — 5V 統一架構
 
@@ -65,29 +74,29 @@ ESP32 GPIO22 → D4184 #2 SIG (氣泵開關)
 所有 GND 統一接至共地匯流排
 ```
 
-### 逐線接線對照表
+### 逐線接線對照表 (v2.0)
 
 | # | 線色 | 起點 | 終點 | 用途 |
 |---|------|------|------|------|
-| 1 | 🔴 紅 | 電池 (+) | DC-DC VIN+ | 電池正極輸入 |
-| 2 | ⚫ 黑 | 電池 (-) | DC-DC VIN- | 電池負極/接地 |
-| 3 | 🟡 黃 | DC-DC VOUT+ | ESP32 5V | 5V 供電 (匯流排) |
-| 4 | 🟡 黃 | DC-DC VOUT+ | D4184 #1 VCC | 5V 供電 (匯流排) |
-| 5 | 🟡 黃 | DC-DC VOUT+ | D4184 #2 VCC | 5V 供電 (匯流排) |
-| 6 | ⚫ 黑 | DC-DC VOUT- | ESP32 GND | GND (匯流排) |
-| 7 | ⚫ 黑 | DC-DC VOUT- | D4184 #1 GND | GND (匯流排) |
-| 8 | ⚫ 黑 | DC-DC VOUT- | D4184 #2 GND | GND (匯流排) |
-| 9 | 🟢 綠 | ESP32 GPIO27 | D4184 #1 SIG | 水泵控制訊號 |
-| 10 | 🟠 橙 | ESP32 GPIO22 | D4184 #2 SIG | 氣泵控制訊號 |
-| 11 | 🔵 藍 | 分壓電阻中點 | ESP32 GPIO35 | 電壓偵測 / 按鈕 (共用) |
-| 12 | 🟢 綠 | ESP32 GPIO16 | EC11 CLK | 編碼器 CLK (solder to LED pad) |
-| 13 | 🟠 橙 | ESP32 GPIO17 | EC11 DT | 編碼器 DT (solder to LED pad) |
-| 14 | 🟣 紫 | D4184 #1 M+ | Kamoer NKP (+) | 水泵馬達正極 |
-| 15 | 🟣 紫 | D4184 #1 M- | Kamoer NKP (-) | 水泵馬達負極 |
-| 16 | 🟣 紫 | D4184 #2 M+ | Air Pump (+) | 氣泵馬達正極 |
-| 17 | 🟣 紫 | D4184 #2 M- | Air Pump (-) | 氣泵馬達負極 |
+| 1 | 🔴 | 電池 (+) | DC-DC VIN+ | 電池正極輸入 |
+| 2 | ⚫ | 電池 (-) | DC-DC VIN- | 電池負極接地 |
+| 3 | 🟡 | DC-DC VOUT+ | ESP32-S3 5V | 系統 5V 供電 |
+| 4 | 🟡 | DC-DC VOUT+ | D4184 #1 VCC | 水泵動力電源 |
+| 5 | 🟡 | DC-DC VOUT+ | D4184 #2 VCC | 氣泵動力電源 |
+| 6 | ⚫ | DC-DC VOUT- | GND BUS | 所有 GND 匯流 |
+| 7 | 🔵 | 分壓中點 | GPIO 6 | 電池電壓 ADC |
+| 8 | 🟢 | GPIO 1 | EC11 CLK | 編碼器訊號 A |
+| 9 | 🟠 | GPIO 2 | EC11 DT | 編碼器訊號 B |
+| 10| ⚪ | GPIO 3 | EC11 SW | 編碼器按鈕 |
+| 11| 🔴 | ESP32 3.3V | EC11 (+) | 編碼器電源 |
+| 12| 🟣 | GPIO 4 | D4184 #1 SIG | 水泵控制訊號 |
+| 13| 🟣 | GPIO 5 | D4184 #2 SIG | 氣泵控制訊號 |
+| 14| 🌊 | GPIO 10-14 | LCD SPI | 圓形螢幕數據線 |
+| 15| ⚡ | ESP32 3.3V | LCD VCC | 螢幕電源 |
+| 16| 🟣 | D4184 M± | 水泵馬達 | 水泵驅動 |
+| 17| 🟣 | D4184 M± | 氣泵馬達 | 氣泵驅動 |
 
-> ⚠️ **硬體改裝提示**：為了釋放 GPIO16/17 給編碼器使用，必須拆除 CYD 板子背面的 RGB LED。GPIO35 同時負責電壓監測與編碼器按鈕，按鈕按下時會將電壓拉至 0V。
+> 💡 **v2.0 改進**：採用 ESP32-S3 後，腳位充足，不再需要任何硬體拆除或共用腳位的改裝。所有線路均有獨立對應腳位。
 
 > 💡 **不需要 MT3608 升壓模組！** 所有動力元件統一由 5V 降壓輸出供電。
 
