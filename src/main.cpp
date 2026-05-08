@@ -5,6 +5,7 @@
 #include "Style.h"
 #include "ColdDripEngine.h"
 #include "UIComponents.h"
+// EC11 Encoder 處理邏輯直接放在 main.cpp 以避免 IRAM 連結錯誤
 
 // ============================================================
 // 冰滴咖啡機控制器 - 主程式
@@ -35,6 +36,23 @@ unsigned long lastAnimFrame = 0;
 int animFrame = 0;
 bool needFullRedraw = true;
 
+// --- 編碼器全域變數 ---
+volatile int encoderPos = 0;
+int settingsFocus = 0; // 0: 間隔, 1: 持續時間, 2: 返回
+unsigned long lastEncoderAction = 0;
+
+void IRAM_ATTR encoderISR() {
+    static uint8_t lastState = 0;
+    uint8_t clk = digitalRead(ENCODER_CLK_PIN);
+    uint8_t dt = digitalRead(ENCODER_DT_PIN);
+    uint8_t currentState = (clk << 1) | dt;
+    if (currentState != lastState) {
+        if (lastState == 0b00 && currentState == 0b01) encoderPos++;
+        else if (lastState == 0b00 && currentState == 0b10) encoderPos--;
+        lastState = currentState;
+    }
+}
+
 // --- 觸控防抖 ---
 unsigned long lastTouchTime = 0;
 const unsigned long TOUCH_DEBOUNCE_MS = 350;
@@ -47,6 +65,7 @@ void drawSettingsPage();
 void updateSettingsPage();
 void handleMainTouch(int tx, int ty);
 void handleSettingsTouch(int tx, int ty);
+void handleEncoder();
 
 // ============================================================
 // 開機動畫 - 咖啡杯圖示
@@ -418,6 +437,15 @@ void updateSettingsPage() {
     tft.setTextColor(CD_WATER_BLUE);
     sprintf(buf, "Est. Total: %.0f ml / %dhr", totalMl, TARGET_TIME_HOURS);
     tft.drawString(buf, 12, 218);
+
+    // --- 編碼器焦點提示 ---
+    if (settingsFocus == 0) {
+        tft.drawRoundRect(4, 30, 312, 76, 4, CD_WATER_BLUE);
+        tft.drawRoundRect(5, 31, 310, 74, 4, CD_WATER_BLUE);
+    } else if (settingsFocus == 1) {
+        tft.drawRoundRect(4, 112, 312, 76, 4, CD_WATER_BLUE);
+        tft.drawRoundRect(5, 113, 310, 74, 4, CD_WATER_BLUE);
+    }
 }
 
 // ============================================================
@@ -564,6 +592,13 @@ void setup() {
     // 初始化引擎
     engine.begin();
     
+    // 初始化編碼器 (EC11)
+    pinMode(ENCODER_CLK_PIN, INPUT_PULLUP);
+    pinMode(ENCODER_DT_PIN, INPUT_PULLUP);
+    pinMode(ENCODER_SW_PIN, INPUT); // GPIO35 外部有分壓電阻
+    attachInterrupt(digitalPinToInterrupt(ENCODER_CLK_PIN), encoderISR, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(ENCODER_DT_PIN), encoderISR, CHANGE);
+    
     // 繪製主頁面
     drawMainPage();
     updateMainPage();
@@ -617,5 +652,86 @@ void loop() {
         }
     }
     
+    // 編碼器處理
+    handleEncoder();
+    
     delay(10);
+}
+
+// ============================================================
+// 編碼器交互邏輯
+// ============================================================
+void handleEncoder() {
+    // 讀取並重置增量
+    noInterrupts();
+    int delta = encoderPos;
+    encoderPos = 0;
+    interrupts();
+    
+    // 讀取按鈕 (Analog 讀取判斷)
+    bool pressed = analogRead(ENCODER_SW_PIN) < 100;
+    static bool lastPressed = false;
+    unsigned long now = millis();
+    
+    // 處理旋轉
+    if (delta != 0) {
+        lastEncoderAction = now;
+        if (currentPage == PAGE_MAIN) {
+            // 主頁面：快速調整滴灌間隔 (±1s * delta)
+            int currentInterval = engine.getStatus().dripIntervalSec;
+            int nextInterval = currentInterval + delta;
+            nextInterval = constrain(nextInterval, 10, 300);
+            if (nextInterval != currentInterval) {
+                engine.setDripInterval(nextInterval);
+                updateMainPage();
+            }
+        } else if (currentPage == PAGE_SETTINGS) {
+            // 設定頁面：依焦點調整不同參數
+            if (settingsFocus == 0) {
+                settingDripInterval += (delta * 1); // 精細調整
+                settingDripInterval = constrain(settingDripInterval, 10, 300);
+                updateSettingsPage();
+            } else if (settingsFocus == 1) {
+                settingPumpDuration += (delta * 10); // 精細調整
+                settingPumpDuration = constrain(settingPumpDuration, 500, 5000);
+                updateSettingsPage();
+            } else if (settingsFocus == 2) {
+                // 如果在返回按鈕上旋轉，就切換焦點
+                settingsFocus = (delta > 0) ? 0 : 1;
+                updateSettingsPage();
+            }
+        }
+    }
+    
+    // 處理按鈕 (下降沿觸發，因為按下時電壓低於閾值)
+    if (pressed && !lastPressed && (now - lastTouchTime >= TOUCH_DEBOUNCE_MS)) {
+        lastTouchTime = now;
+        if (currentPage == PAGE_MAIN) {
+            // 主頁面：點擊切換 萃取/停止
+            BrewState state = engine.getState();
+            if (state == BREW_IDLE || state == BREW_COMPLETE) {
+                engine.startBrew();
+            } else if (state == BREW_RUNNING) {
+                engine.pauseBrew();
+            } else if (state == BREW_PAUSED) {
+                engine.resumeBrew();
+            }
+            needFullRedraw = true;
+        } else if (currentPage == PAGE_SETTINGS) {
+            // 設定頁面：切換焦點
+            settingsFocus++;
+            if (settingsFocus > 2) {
+                // 如果點擊了"返回"區域或是循環到了，則保存並返回
+                // 這裡暫時設定點擊三次回到主頁
+                engine.setDripInterval(settingDripInterval);
+                engine.setPumpDuration(settingPumpDuration);
+                currentPage = PAGE_MAIN;
+                needFullRedraw = true;
+                settingsFocus = 0;
+            } else {
+                updateSettingsPage();
+            }
+        }
+    }
+    lastPressed = pressed;
 }

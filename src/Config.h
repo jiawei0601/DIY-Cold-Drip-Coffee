@@ -17,6 +17,14 @@
 #define AIR_PURGE_DURATION_MS 30000 // Air Purge 持續時間 (毫秒, 預設 30 秒)
 #define AIR_PURGE_ENABLED   true    // 萃取完成後自動執行 Air Purge
 
+// --- EC11 旋轉編碼器 ---
+// 需拆除 CYD 板上 RGB LED 以釋放 GPIO16/GPIO17
+// GPIO35 為 input-only，適合做按鈕輸入
+#define ENCODER_CLK_PIN     16      // EC11 CLK (Phase A) - 原 RGB LED Green
+#define ENCODER_DT_PIN      17      // EC11 DT  (Phase B) - 原 RGB LED Blue
+#define ENCODER_SW_PIN      35      // EC11 SW  (按鈕) - 共用 ADC 腳位 (input-only)
+#define ENCODER_DEBOUNCE_MS 5       // 編碼器消抖時間 (毫秒)
+
 // --- 電源架構 ---
 // 電池: Eneloop Pro AA x4 (串聯 4.8~5.8V)
 // 降壓: DC-DC 降壓模組 → 穩定 5V
@@ -24,7 +32,8 @@
 // 注意: 不需要升壓模組，所有元件統一 5V 供電
 
 // --- 電量監測 (分壓電阻: 100kΩ / 10kΩ) ---
-// ADC 腳位: GPIO35 (ADC1_CH7, 僅輸入, 不與觸控衝突)
+// ADC 腳位: GPIO35 (ADC1_CH7, 僅輸入, 與 EC11 SW 共用)
+// 透過軟體切換讀取模式: 平時讀電壓，按下時讀按鈕
 #define BATTERY_ADC_PIN     35
 #define VOLTAGE_DIVIDER_R1  100000.0f  // 上臂電阻 100kΩ
 #define VOLTAGE_DIVIDER_R2  10000.0f   // 下臂電阻 10kΩ
