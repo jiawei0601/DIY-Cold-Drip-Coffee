@@ -1,17 +1,16 @@
-# ☕ 冰滴咖啡機控制器 (Cold Drip Coffee Controller) v2.2
+# ☕ 冰滴咖啡機控制器 (Cold Drip Coffee Controller) v3.0
 
-> **ESP32-WROOM-32 驅動** ｜ 1.28" 圓形 LCD ｜ 實體旋鈕操作
-> **全 5V 統一架構** — 使用 XL4015 穩壓、2 路繼電器驅動。
+> **ESP32-WROOM-32 驅動** ｜ 1.3" OLED (I2C) ｜ KY-040 旋鈕模組
+> **全 5V 統一架構** — 經濟、穩定、模組化設計。
 
 ## 📋 專案概述
 
 | 項目 | 規格 |
 |------|------|
 | **目標產量** | 600ml / 6小時 |
-| **配置** | 左右並列雙槽結構（右側入水、左側萃取） |
 | **控制器** | **ESP32 DevKit V1 (WROOM-32)** |
-| **顯示器** | **1.28" 圓形 LCD (GC9A01)** |
-| **互動介面** | **EC11 旋轉編碼器 (實體控制)** |
+| **顯示器** | **1.3" OLED 模組 (SH1106 / I2C)** |
+| **互動介面** | **KY-040 旋轉編碼器模組** |
 | **電源架構** | 全 5V 統一供電 (XL4015 降壓) |
 | **核心邏輯** | 間歇滴灌 + 自動 Air Purge |
 
@@ -19,12 +18,12 @@
 
 | 類別 | 項目規格 | 用途 |
 |------|----------|------|
-| 控制器 | **ESP32 DevKit V1** | 核心 CPU (WROOM-32 模組) |
-| 顯示器 | **1.28" 圓形 LCD (GC9A01)** | 圓形資訊顯示 |
-| 旋鈕 | **EC11 旋轉編碼器** | 參數調整與操控 |
-| 驅動件 | **2 路繼電器模組 (5V)** | 控制馬達開關 (低電平觸發) |
-| 降壓件 | **XL4015 降壓模組 (CV/CC)** | 將電池電壓降至穩定的 5V |
-| 水泵 | Kamoer NKP 蠕動幫浦 (**6V**) | 精準滴灌動力 |
+| 控制器 | **ESP32 DevKit V1** | 核心 CPU (WROOM-32) |
+| 顯示器 | **1.3" OLED 模組 (I2C)** | 系統資訊顯示 (SH1106) |
+| 旋鈕 | **KY-040 編碼器模組** | 帶電路板，含 10k 上拉電阻 |
+| 驅動件 | **2 路繼電器模組 (5V)** | 控制水泵與氣泵 |
+| 降壓件 | **XL4015 降壓模組 (CV/CC)** | 穩定 5V 電源供應 |
+| 水泵 | Kamoer NKP 蠕動幫浦 | 精準滴灌動力 |
 | 氣泵 | **5V** 微型氣泵 | Air Purge 清掃管路 |
 | 電源 | Eneloop Pro AA 電池 x 4 | 4.8V~5.8V 穩定動力源 |
 | 管件 | 三通接頭 + 單向閥 x 3 | 完整防逆流水路系統 |
@@ -39,23 +38,20 @@
 
 ![5V 統一架構配線圖](docs/wiring_diagram.png)
 
-### GPIO 分配 (v2.2 - ESP32 WROOM)
+### GPIO 分配 (v3.0 - OLED I2C)
 
 | GPIO | 功能 | 介面 | 說明 |
 |------|------|------|------|
-| **GPIO 32** | Encoder CLK | INPUT | EC11 CLK |
-| **GPIO 33** | Encoder DT | INPUT | EC11 DT |
-| **GPIO 35** | Encoder SW | INPUT | EC11 按鈕 (Input Only) |
-| **GPIO 34** | 電壓監測 | ADC | 5V 分壓輸入 (Input Only) |
-| **GPIO 25** | 水泵控制 | OUTPUT | 繼電器 IN1 (低電平觸發) |
-| **GPIO 26** | 氣泵控制 | OUTPUT | 繼電器 IN2 (低電平觸發) |
-| **GPIO 18** | LCD SCL | SPI SCK | VSPI SCK |
-| **GPIO 23** | LCD SDA | SPI MOSI | VSPI MOSI |
-| **GPIO 5** | LCD CS | CHIP SEL | VSPI CS |
-| **GPIO 2** | LCD DC | DATA/CMD | 數據指令切換 |
-| **GPIO 4** | LCD RES | RESET | 螢幕重設 |
-| **GPIO 15** | LCD BLK | BACKLIGHT | 背光控制 |
+| **GPIO 32** | Encoder CLK | INPUT | KY-040 CLK |
+| **GPIO 33** | Encoder DT | INPUT | KY-040 DT |
+| **GPIO 35** | Encoder SW | INPUT | KY-040 SW (按鈕) |
+| **GPIO 34** | 電壓監測 | ADC | 電池電壓 ADC |
+| **GPIO 25** | 水泵控制 | OUTPUT | 繼電器 IN1 |
+| **GPIO 26** | 氣泵控制 | OUTPUT | 繼電器 IN2 |
+| **GPIO 21** | OLED SDA | I2C SDA | 數據線 |
+| **GPIO 22** | OLED SCL | I2C SCL | 時鐘線 |
 | 5V | 電源輸入 | Power | 降壓模組 OUT+ |
+| 3.3V | 邏輯電源 | Power | 供電給 OLED 與 KY-040 |
 | GND | 共地 | GND | 所有模組共地 |
 
 ### 接線重點 — 5V 統一架構
@@ -87,15 +83,14 @@ ESP32 GPIO22 → D4184 #2 SIG (氣泵開關)
 | 9 | 🟢 | GPIO 32 | EC11 CLK | 編碼器訊號 A |
 | 10| 🟠 | GPIO 33 | EC11 DT | 編碼器訊號 B |
 | 11| ⚪ | GPIO 35 | EC11 SW | 編碼器按鈕 |
-| 12| 🔴 | ESP32 3.3V | EC11 (+) | 編碼器電源 |
+| 12| 🔴 | ESP32 3.3V | KY-040 VCC | 編碼器電源 |
 | 13| 🟣 | GPIO 25 | 繼電器 IN1 | 水泵啟動訊號 |
 | 14| 🟣 | GPIO 26 | 繼電器 IN2 | 氣泵啟動訊號 |
-| 15| 🌊 | GPIO 18, 23 | LCD SPI | 螢幕 SCL, SDA |
-| 16| ⚡ | ESP32 3.3V | LCD VCC | 螢幕電源 |
-| 17| 🟣 | GPIO 5, 2, 4 | LCD 控制 | CS, DC, RES 線 |
-| 18| 🟣 | 繼電器 NO1/2 | 馬達正極 | 水泵與氣泵動力 |
+| 15| 🌊 | GPIO 21, 22 | OLED I2C | 螢幕 SDA, SCL |
+| 16| ⚡ | ESP32 3.3V | OLED VCC | 螢幕電源 |
+| 17| ⚫ | GND | 所有模組 GND | 系統共地 |
 
-> 💡 **v2.2 調整重點**：使用經典的 **ESP32-WROOM-32**。請注意 WROOM 的 GPIO 34/35 僅能作為輸入，不可驅動繼電器或 LED。SPI 則固定使用硬體 VSPI 腳位以獲得最佳顯示效能。
+> 💡 **v3.0 調整重點**：改用 **1.3" OLED (SH1106)**。I2C 介面極大地簡化了接線（只需 4 根線）。KY-040 模組內建了上拉電阻，接線更為穩定可靠。程式碼已同步切換至 **U8g2 庫** 以驅動單色介面。
 
 > 💡 **不需要 MT3608 升壓模組！** 所有動力元件統一由 5V 降壓輸出供電。
 
