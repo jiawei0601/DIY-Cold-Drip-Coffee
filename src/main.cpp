@@ -6,14 +6,14 @@
 #include "ColdDripEngine.h"
 
 // ============================================================
-// 冰滴咖啡機控制器 v3.0
+// 冰滴咖啡機控制器 v3.2 (MOSFET + SH1107 版)
 // 平台: ESP32-WROOM-32 (DevKit V1)
-// 顯示: 1.3" OLED (SH1106 I2C)
-// 操控: KY-040 旋轉編碼器模組
+// 顯示: 1.5" OLED (SH1107 128x128 I2C)
+// 驅動: 2x LR7843 MOSFET 模組 (靜音)
 // ============================================================
 
-// 初始化 OLED (SH1106 128x64)
-U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
+// 初始化 OLED (SH1107 128x128 正方形螢幕)
+U8G2_SH1107_128X128_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
 
 ESP32Encoder encoder;
 ColdDripEngine engine;
@@ -37,7 +37,7 @@ void setup() {
     // 初始化引擎
     engine.begin();
     
-    Serial.println("System v3.0 Initialized (WROOM + OLED + KY-040)");
+    Serial.println("System v3.2 Initialized (WROOM + SH1107 + MOSFET)");
 }
 
 void loop() {
@@ -56,7 +56,7 @@ void loop() {
     
     static bool lastBtn = HIGH;
     bool currentBtn = digitalRead(ENCODER_SW_PIN);
-    if (currentBtn == LOW && lastBtn == HIGH) { // 按下
+    if (currentBtn == LOW && lastBtn == HIGH) { // 按下旋鈕
         BrewState state = engine.getState();
         if (state == BREW_IDLE || state == BREW_COMPLETE) engine.startBrew();
         else if (state == BREW_RUNNING) engine.pauseBrew();
@@ -64,40 +64,47 @@ void loop() {
     }
     lastBtn = currentBtn;
 
-    // 更新顯示 (128x64 單色)
+    // 更新顯示 (128x128 滿版優化)
     if (now - lastDisplayUpdate >= DISPLAY_REFRESH_MS) {
         lastDisplayUpdate = now;
         
         BrewStatus st = engine.getStatus();
         u8g2.clearBuffer();
         
-        // 1. 頂部狀態
+        // 1. 頂部狀態列
         u8g2.setFont(u8g2_font_6x10_tf);
         const char* stateStr = "IDLE";
-        if (st.state == BREW_RUNNING) stateStr = "BREWING";
-        else if (st.state == BREW_PURGING) stateStr = "PURGING";
+        if (st.state == BREW_RUNNING) stateStr = "BREWING...";
+        else if (st.state == BREW_PURGING) stateStr = "PURGING...";
         else if (st.state == BREW_PAUSED) stateStr = "PAUSED";
         u8g2.drawStr(0, 10, stateStr);
         
         char buf[32];
-        sprintf(buf, "%d%% %.1fV", st.batteryPercent, st.batteryVoltage);
-        u8g2.drawStr(70, 10, buf);
-        u8g2.drawLine(0, 12, 128, 12);
+        sprintf(buf, "%d%%", st.batteryPercent);
+        u8g2.drawStr(100, 10, buf);
+        u8g2.drawLine(0, 14, 128, 14);
         
-        // 2. 中央數值: 已萃取量
-        u8g2.setFont(u8g2_font_logisoso24_tn);
+        // 2. 中央大數值: 已萃取量 (ml)
+        u8g2.setFont(u8g2_font_logisoso32_tn); // 使用更大的字體
         sprintf(buf, "%.0f", st.estimatedMl);
-        u8g2.drawStr(5, 45, buf);
-        u8g2.setFont(u8g2_font_6x10_tf);
-        u8g2.drawStr(65, 45, "ml extracted");
+        u8g2.drawStr(15, 65, buf);
         
-        // 3. 底部: 間隔與進度
+        u8g2.setFont(u8g2_font_6x12_tf);
+        u8g2.drawStr(85, 65, "ml");
+        u8g2.drawStr(15, 80, "EXTRACTED");
+        
+        // 3. 底部資訊
+        u8g2.drawLine(0, 95, 128, 95);
         sprintf(buf, "Interval: %ds", st.dripIntervalSec);
-        u8g2.drawStr(0, 58, buf);
+        u8g2.drawStr(0, 110, buf);
         
+        sprintf(buf, "V: %.2fV", st.batteryVoltage);
+        u8g2.drawStr(75, 110, buf);
+        
+        // 進度條
         float progress = (st.totalCycles > 0) ? (float)st.cycleCount * 100.0f / st.totalCycles : 0;
-        u8g2.drawFrame(80, 52, 45, 8);
-        u8g2.drawBox(82, 54, (int)(41 * progress / 100.0f), 4);
+        u8g2.drawFrame(0, 118, 128, 8);
+        u8g2.drawBox(2, 120, (int)(124 * progress / 100.0f), 4);
         
         u8g2.sendBuffer();
     }
