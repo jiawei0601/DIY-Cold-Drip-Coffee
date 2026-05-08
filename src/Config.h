@@ -4,16 +4,24 @@
 // ============================================================
 // 冰滴咖啡機控制器 - 硬體與參數配置
 // ESP32-CYD (ESP32-2432S028)
+// 全 5V 統一架構 (無升壓模組)
 // ============================================================
 
-// --- 幫浦控制 (Kamoer NKP via D4184 MOSFET) ---
+// --- 水泵控制 (Kamoer NKP 6V via D4184 MOSFET) ---
+// 6V 額定蠕動幫浦，5V 供電下流量約降 15-20%
 // CYD 可用 GPIO: 27, 22 (未被螢幕/觸控佔用)
 #define PUMP_PIN            27      // D4184 MOSFET #1 訊號腳位 (水泵)
 
-// --- 氣泵控制 (12V Air Pump via D4184 MOSFET #2) ---
+// --- 氣泵控制 (5V Air Pump via D4184 MOSFET #2) ---
 #define AIR_PUMP_PIN        22      // D4184 MOSFET #2 訊號腳位 (氣泵)
 #define AIR_PURGE_DURATION_MS 30000 // Air Purge 持續時間 (毫秒, 預設 30 秒)
 #define AIR_PURGE_ENABLED   true    // 萃取完成後自動執行 Air Purge
+
+// --- 電源架構 ---
+// 電池: Eneloop Pro AA x4 (串聯 4.8~5.8V)
+// 降壓: DC-DC 降壓模組 → 穩定 5V
+// 供電: 5V → ESP32 CYD + 水泵 (D4184 #1) + 氣泵 (D4184 #2)
+// 注意: 不需要升壓模組，所有元件統一 5V 供電
 
 // --- 電量監測 (分壓電阻: 100kΩ / 10kΩ) ---
 // ADC 腳位: GPIO35 (ADC1_CH7, 僅輸入, 不與觸控衝突)
@@ -34,11 +42,12 @@
 #define TARGET_VOLUME_ML    600     // 目標萃取量 (ml)
 #define TARGET_TIME_HOURS   6       // 目標萃取時間 (小時)
 #define DRIP_INTERVAL_SEC   60      // 滴灌間隔 (秒)
-#define PUMP_ON_DURATION_MS 2000    // 每次幫浦啟動時間 (毫秒)
+#define PUMP_ON_DURATION_MS 2500    // 每次幫浦啟動時間 (毫秒, 5V 流量補償)
 
-// 計算流量: 每次 ~1.67ml, 每分鐘一次
+// 計算流量: 6V 泵在 5V 下流量約降 20%, 延長 ON 時間補償
+// 每次 ~1.67ml, 每分鐘一次
 // 6hr = 360次 x 1.67ml ≈ 600ml
-#define FLOW_RATE_ML_PER_CYCLE  1.67f  // 每週期流量 (ml)
+#define FLOW_RATE_ML_PER_CYCLE  1.67f  // 每週期流量 (ml, 校準後調整)
 
 // --- 顯示更新頻率 ---
 #define DISPLAY_REFRESH_MS  1000    // 畫面更新間隔 (毫秒)

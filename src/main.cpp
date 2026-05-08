@@ -9,6 +9,7 @@
 // ============================================================
 // 冰滴咖啡機控制器 - 主程式
 // ESP32-CYD (ESP32-2432S028)
+// 全 5V 統一架構
 // ============================================================
 
 // --- 硬體物件 ---
@@ -78,7 +79,7 @@ void drawSplashScreen() {
     tft.drawString("COLD DRIP", cx, cy + 55);
     tft.setTextSize(1);
     tft.setTextColor(CD_LATTE);
-    tft.drawString("COFFEE CONTROLLER v1.0", cx, cy + 75);
+    tft.drawString("COFFEE CONTROLLER v1.1", cx, cy + 75);
     
     // 底部進度條動畫
     for (int i = 0; i <= 100; i += 2) {
@@ -538,8 +539,8 @@ void handleSettingsTouch(int tx, int ty) {
 void setup() {
     Serial.begin(115200);
     Serial.println("\n========================================");
-    Serial.println("  Cold Drip Coffee Controller v1.0");
-    Serial.println("  ESP32-CYD (ESP32-2432S028)");
+    Serial.println("  Cold Drip Coffee Controller v1.1");
+    Serial.println("  ESP32-CYD | 5V Unified Architecture");
     Serial.println("========================================\n");
     
     // 背光
