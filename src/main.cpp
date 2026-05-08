@@ -1,618 +1,80 @@
 #include <Arduino.h>
 #include <TFT_eSPI.h>
-#include <XPT2046_Touchscreen.h>
+#include <ESP32Encoder.h>
 #include "Config.h"
 #include "Style.h"
 #include "ColdDripEngine.h"
 #include "UIComponents.h"
-// EC11 Encoder 處理邏輯直接放在 main.cpp 以避免 IRAM 連結錯誤
 
 // ============================================================
-// 冰滴咖啡機控制器 - 主程式
-// ESP32-CYD (ESP32-2432S028)
-// 全 5V 統一架構
+// 冰滴咖啡機控制器 v2.0
+// 平台: ESP32-S3 N16R8
+// 顯示: 1.28" GC9A01 圓形 LCD
+// 操控: EC11 旋轉編碼器
 // ============================================================
 
-// --- 硬體物件 ---
 TFT_eSPI tft = TFT_eSPI();
-#define XPT2046_IRQ   36
-#define XPT2046_MOSI  32
-#define XPT2046_MISO  39
-#define XPT2046_CLK   25
-#define XPT2046_CS    33
-SPIClass touchSPI = SPIClass(VSPI);
-XPT2046_Touchscreen touch(XPT2046_CS);
-
-// --- 核心引擎 ---
+ESP32Encoder encoder;
 ColdDripEngine engine;
 
-// --- 頁面管理 ---
+// --- UI 狀態 ---
 enum PageIndex { PAGE_MAIN = 0, PAGE_SETTINGS = 1 };
 PageIndex currentPage = PAGE_MAIN;
-
-// --- UI 狀態 ---
 unsigned long lastDisplayUpdate = 0;
-unsigned long lastAnimFrame = 0;
 int animFrame = 0;
 bool needFullRedraw = true;
 
-// --- 編碼器全域變數 ---
-volatile int encoderPos = 0;
+// --- 設定參數 (暫存) ---
+int settingDripInterval;
+int settingPumpDuration;
 int settingsFocus = 0; // 0: 間隔, 1: 持續時間, 2: 返回
-unsigned long lastEncoderAction = 0;
 
-void IRAM_ATTR encoderISR() {
-    static uint8_t lastState = 0;
-    uint8_t clk = digitalRead(ENCODER_CLK_PIN);
-    uint8_t dt = digitalRead(ENCODER_DT_PIN);
-    uint8_t currentState = (clk << 1) | dt;
-    if (currentState != lastState) {
-        if (lastState == 0b00 && currentState == 0b01) encoderPos++;
-        else if (lastState == 0b00 && currentState == 0b10) encoderPos--;
-        lastState = currentState;
-    }
-}
-
-// --- 觸控防抖 ---
-unsigned long lastTouchTime = 0;
-const unsigned long TOUCH_DEBOUNCE_MS = 350;
+// --- 編碼器狀態 ---
+long lastEncoderPos = 0;
+unsigned long lastButtonPressTime = 0;
 
 // --- 前向宣告 ---
 void drawMainPage();
 void updateMainPage();
-void drawMainButtons(BrewState state);
 void drawSettingsPage();
 void updateSettingsPage();
-void handleMainTouch(int tx, int ty);
-void handleSettingsTouch(int tx, int ty);
-void handleEncoder();
+void handleControls();
 
-// ============================================================
-// 開機動畫 - 咖啡杯圖示
-// ============================================================
-void drawSplashScreen() {
-    tft.fillScreen(CD_BG);
-    
-    // 咖啡杯外框
-    int cx = 160, cy = 90;
-    tft.fillRoundRect(cx - 25, cy - 15, 50, 40, 8, CD_ESPRESSO);
-    tft.drawRoundRect(cx - 25, cy - 15, 50, 40, 8, CD_COFFEE);
-    // 杯把
-    tft.drawArc(cx + 25, cy + 5, 12, 8, 290, 70, CD_COFFEE, CD_BG);
-    // 杯底托盤
-    tft.fillRoundRect(cx - 30, cy + 25, 60, 5, 2, CD_LATTE);
-    
-    // 蒸氣動畫 (靜態版)
-    for (int i = 0; i < 3; i++) {
-        int sx = cx - 10 + i * 10;
-        for (int j = 0; j < 3; j++) {
-            int sy = cy - 20 - j * 6;
-            tft.fillCircle(sx + (j % 2 ? 2 : -2), sy, 2, CD_GRAY);
-        }
-    }
-    
-    // 標題
-    tft.setTextColor(CD_CREAM);
-    tft.setTextDatum(MC_DATUM);
-    tft.setTextSize(2);
-    tft.drawString("COLD DRIP", cx, cy + 55);
-    tft.setTextSize(1);
-    tft.setTextColor(CD_LATTE);
-    tft.drawString("COFFEE CONTROLLER v1.1", cx, cy + 75);
-    
-    // 底部進度條動畫
-    for (int i = 0; i <= 100; i += 2) {
-        UIComponents::drawProgressBar(&tft, 60, cy + 100, 200, 8, (float)i, CD_COFFEE);
-        delay(20);
-    }
-    
-    tft.setTextDatum(TL_DATUM);
-    delay(500);
-}
-
-// ============================================================
-// 主控頁面繪製
-// ============================================================
-void drawMainPage() {
-    tft.fillScreen(CD_BG);
-    
-    // 頂部導航列
-    tft.fillRect(0, 0, 320, 26, CD_ESPRESSO);
-    tft.setTextColor(CD_CREAM);
-    tft.setTextDatum(MC_DATUM);
-    tft.setTextSize(1);
-    
-    // 頁面切換按鈕
-    // 主控 (左半)
-    tft.fillRoundRect(4, 2, 70, 22, 4, CD_COFFEE);
-    tft.drawString("MAIN", 39, 13);
-    // 設定 (右半)
-    tft.fillRoundRect(78, 2, 70, 22, 4, CD_BG_CARD);
-    tft.setTextColor(CD_GRAY);
-    tft.drawString("CONFIG", 113, 13);
-    
-    // 電池資訊區 (右上)
-    BrewStatus st = engine.getStatus();
-    UIComponents::drawBatteryIcon(&tft, 210, 5, st.batteryPercent, st.batteryVoltage);
-    
-    tft.setTextDatum(TL_DATUM);
-    
-    // --- 萃取狀態大卡 ---
-    UIComponents::drawCard(&tft, 4, 30, 312, 56);
-    
-    // --- 數值區塊 (2x2 格局) ---
-    // 已萃取 | 已耗時
-    UIComponents::drawCard(&tft, 4, 90, 153, 46);
-    UIComponents::drawCard(&tft, 163, 90, 153, 46);
-    
-    // 剩餘量 | 剩餘時間
-    UIComponents::drawCard(&tft, 4, 140, 153, 46);
-    UIComponents::drawCard(&tft, 163, 140, 153, 46);
-    
-    // --- 底部控制按鈕 ---
-    // 按鈕會在 updateMainPage 中繪製
-    
-    needFullRedraw = false;
-}
-
-void updateMainPage() {
-    BrewStatus st = engine.getStatus();
-    char buf[32];
-    
-    // --- 更新電池 (右上) ---
-    tft.fillRect(210, 2, 108, 22, CD_ESPRESSO);
-    UIComponents::drawBatteryIcon(&tft, 210, 5, st.batteryPercent, st.batteryVoltage);
-    
-    // --- 狀態大卡 ---
-    tft.fillRoundRect(6, 32, 308, 52, 4, CD_BG_CARD);
-    
-    // 狀態文字
-    const char* stateStr;
-    uint16_t stateColor;
-    switch (st.state) {
-        case BREW_IDLE:        stateStr = "STANDBY";   stateColor = CD_GRAY; break;
-        case BREW_RUNNING:     stateStr = "BREWING";   stateColor = CD_GREEN; break;
-        case BREW_PAUSED:      stateStr = "PAUSED";    stateColor = CD_AMBER; break;
-        case BREW_PURGING:     stateStr = "PURGING";   stateColor = CD_AMBER; break;
-        case BREW_COMPLETE:    stateStr = "COMPLETE";  stateColor = CD_WATER_BLUE; break;
-        case BREW_LOW_BATTERY: stateStr = "LOW BATT!"; stateColor = CD_RED; break;
-        default:               stateStr = "---";       stateColor = CD_GRAY; break;
-    }
-    
-    // 狀態指示燈
-    tft.fillCircle(20, 50, 6, stateColor);
-    if (st.state == BREW_RUNNING || st.state == BREW_PURGING) {
-        // 呼吸燈效果
-        int brightness = abs((int)(millis() / 10) % 200 - 100);
-        if (brightness > 50) {
-            tft.drawCircle(20, 50, 8, stateColor);
-        }
-    }
-    
-    // 狀態文字 (大)
-    tft.setTextColor(stateColor);
-    tft.setTextSize(2);
-    tft.drawString(stateStr, 34, 38);
-    
-    // 幫浦/氣泵指示
-    if (st.state == BREW_PURGING) {
-        // Purge 期間：水泵+氣泵同時運作
-        tft.setTextColor(CD_AMBER);
-        tft.setTextSize(1);
-        tft.drawString("PURGE: PUMP+AIR", 34, 60);
-        // 顯示氣泵剩餘時間
-        char purgeBuf[16];
-        int purgeRemain = (st.purgeTotalMs - st.purgeElapsedMs) / 1000;
-        if (purgeRemain < 0) purgeRemain = 0;
-        sprintf(purgeBuf, "%ds left", purgeRemain);
-        tft.drawString(purgeBuf, 140, 60);
-    } else if (st.pumpActive) {
-        tft.setTextColor(CD_WATER_BLUE);
-        tft.setTextSize(1);
-        tft.drawString("PUMP ON", 34, 60);
-        UIComponents::drawDripIcon(&tft, 290, 36, animFrame);
-    } else if (st.state == BREW_RUNNING) {
-        tft.setTextColor(CD_DARK_GRAY);
-        tft.setTextSize(1);
-        sprintf(buf, "Next: %ds", 
-            st.dripIntervalSec - (int)((millis() / 1000) % st.dripIntervalSec));
-        tft.drawString(buf, 34, 60);
-    }
-    
-    // 進度條
-    if (st.state == BREW_PURGING) {
-        // Air Purge 專用進度條
-        float purgeProgress = (float)st.purgeElapsedMs / st.purgeTotalMs * 100.0f;
-        if (purgeProgress > 100.0f) purgeProgress = 100.0f;
-        UIComponents::drawProgressBar(&tft, 10, 72, 300, 8, purgeProgress, CD_AMBER);
-        tft.setTextColor(CD_AMBER);
-        tft.setTextSize(1);
-        sprintf(buf, "%.0f%%", purgeProgress);
-        tft.drawString(buf, 268, 60);
-    } else {
-        // 一般萃取進度條
-        float progress = 0;
-        if (st.totalCycles > 0) {
-            progress = (float)st.cycleCount / st.totalCycles * 100.0f;
-        }
-        UIComponents::drawProgressBar(&tft, 10, 72, 300, 8, progress, 
-            st.state == BREW_COMPLETE ? CD_GREEN : CD_WATER_BLUE);
-        tft.setTextColor(CD_CREAM);
-        tft.setTextSize(1);
-        sprintf(buf, "%.1f%%", progress);
-        tft.drawString(buf, 268, 60);
-    }
-    
-    // --- 已萃取 ---
-    tft.fillRoundRect(6, 92, 149, 42, 4, CD_BG_CARD);
-    tft.setTextColor(CD_GRAY);
-    tft.setTextSize(1);
-    tft.drawString("Brewed", 12, 94);
-    tft.setTextColor(CD_WATER_BLUE);
-    tft.setTextSize(2);
-    sprintf(buf, "%.0f ml", st.estimatedMl);
-    tft.drawString(buf, 12, 110);
-    
-    // --- 已耗時 ---
-    tft.fillRoundRect(165, 92, 149, 42, 4, CD_BG_CARD);
-    tft.setTextColor(CD_GRAY);
-    tft.setTextSize(1);
-    tft.drawString("Elapsed", 171, 94);
-    tft.setTextColor(CD_CREAM);
-    tft.setTextSize(2);
-    UIComponents::formatTime(st.elapsedMs, buf);
-    tft.drawString(buf, 171, 110);
-    
-    // --- 剩餘量 ---
-    tft.fillRoundRect(6, 142, 149, 42, 4, CD_BG_CARD);
-    tft.setTextColor(CD_GRAY);
-    tft.setTextSize(1);
-    tft.drawString("Remaining", 12, 144);
-    tft.setTextColor(CD_LATTE);
-    tft.setTextSize(2);
-    float remaining = TARGET_VOLUME_ML - st.estimatedMl;
-    if (remaining < 0) remaining = 0;
-    sprintf(buf, "%.0f ml", remaining);
-    tft.drawString(buf, 12, 160);
-    
-    // --- 剩餘時間 ---
-    tft.fillRoundRect(165, 142, 149, 42, 4, CD_BG_CARD);
-    tft.setTextColor(CD_GRAY);
-    tft.setTextSize(1);
-    tft.drawString("Time Left", 171, 144);
-    tft.setTextColor(CD_LATTE);
-    tft.setTextSize(2);
-    UIComponents::formatRemaining(st.elapsedMs, st.totalMs, buf);
-    tft.drawString(buf, 171, 160);
-    
-    // --- 週期計數 ---
-    tft.fillRect(4, 188, 312, 14, CD_BG);
-    tft.setTextColor(CD_DARK_GRAY);
-    tft.setTextSize(1);
-    sprintf(buf, "Cycle: %d / %d    Interval: %ds  Duration: %dms",
-        st.cycleCount, st.totalCycles, st.dripIntervalSec, st.pumpDurationMs);
-    tft.drawString(buf, 8, 190);
-    
-    // --- 底部按鈕 ---
-    drawMainButtons(st.state);
-}
-
-void drawMainButtons(BrewState state) {
-    // 清除按鈕區域
-    tft.fillRect(4, 205, 312, 33, CD_BG);
-    
-    switch (state) {
-        case BREW_IDLE:
-        case BREW_COMPLETE:
-        case BREW_LOW_BATTERY:
-            // 顯示「開始」按鈕
-            UIComponents::drawButton(&tft, 60, 206, 200, 30, "START", CD_BTN_START);
-            break;
-            
-        case BREW_RUNNING:
-            // 顯示「暫停」和「停止」
-            UIComponents::drawButton(&tft, 10, 206, 145, 30, "PAUSE", CD_AMBER);
-            UIComponents::drawButton(&tft, 165, 206, 145, 30, "STOP", CD_BTN_STOP);
-            break;
-            
-        case BREW_PAUSED:
-            // 顯示「繼續」和「停止」
-            UIComponents::drawButton(&tft, 10, 206, 145, 30, "RESUME", CD_BTN_START);
-            UIComponents::drawButton(&tft, 165, 206, 145, 30, "STOP", CD_BTN_STOP);
-            break;
-            
-        case BREW_PURGING:
-            // 顯示「跳過」和「停止」
-            UIComponents::drawButton(&tft, 10, 206, 145, 30, "SKIP", CD_AMBER);
-            UIComponents::drawButton(&tft, 165, 206, 145, 30, "STOP", CD_BTN_STOP);
-            break;
-    }
-}
-
-// ============================================================
-// 設定頁面
-// ============================================================
-int settingDripInterval;
-int settingPumpDuration;
-
-void drawSettingsPage() {
-    tft.fillScreen(CD_BG);
-    
-    // 頂部導航列
-    tft.fillRect(0, 0, 320, 26, CD_ESPRESSO);
-    tft.setTextColor(CD_GRAY);
-    tft.setTextDatum(MC_DATUM);
-    tft.setTextSize(1);
-    
-    // 主控 (左半)
-    tft.fillRoundRect(4, 2, 70, 22, 4, CD_BG_CARD);
-    tft.drawString("MAIN", 39, 13);
-    // 設定 (右半)
-    tft.fillRoundRect(78, 2, 70, 22, 4, CD_COFFEE);
-    tft.setTextColor(CD_CREAM);
-    tft.drawString("CONFIG", 113, 13);
-    
-    tft.setTextDatum(TL_DATUM);
-    
-    // 讀取當前參數
-    BrewStatus st = engine.getStatus();
-    settingDripInterval = st.dripIntervalSec;
-    settingPumpDuration = st.pumpDurationMs;
-    
-    updateSettingsPage();
-}
-
-void updateSettingsPage() {
-    BrewStatus st = engine.getStatus();
-    char buf[32];
-    
-    // --- 電池資訊 ---
-    tft.fillRect(210, 2, 108, 22, CD_ESPRESSO);
-    UIComponents::drawBatteryIcon(&tft, 210, 5, st.batteryPercent, st.batteryVoltage);
-    
-    // --- 滴灌間隔設定 ---
-    tft.fillRect(4, 30, 312, 80, CD_BG);
-    UIComponents::drawCard(&tft, 4, 30, 312, 76);
-    
-    tft.setTextColor(CD_CREAM);
-    tft.setTextSize(1);
-    tft.drawString("Drip Interval (seconds)", 12, 36);
-    
-    // - 按鈕
-    UIComponents::drawButton(&tft, 12, 54, 50, 40, "-", CD_ESPRESSO);
-    // 數值
-    tft.setTextColor(CD_WHITE);
-    tft.setTextDatum(MC_DATUM);
-    tft.setTextSize(3);
-    sprintf(buf, "%d", settingDripInterval);
-    tft.drawString(buf, 160, 74);
-    tft.setTextSize(1);
-    tft.setTextColor(CD_GRAY);
-    tft.drawString("sec", 160, 92);
-    // + 按鈕
-    UIComponents::drawButton(&tft, 258, 54, 50, 40, "+", CD_ESPRESSO);
-    
-    tft.setTextDatum(TL_DATUM);
-    
-    // --- 幫浦持續時間設定 ---
-    tft.fillRect(4, 112, 312, 80, CD_BG);
-    UIComponents::drawCard(&tft, 4, 112, 312, 76);
-    
-    tft.setTextColor(CD_CREAM);
-    tft.setTextSize(1);
-    tft.drawString("Pump Duration (milliseconds)", 12, 118);
-    
-    // - 按鈕
-    UIComponents::drawButton(&tft, 12, 136, 50, 40, "-", CD_ESPRESSO);
-    // 數值
-    tft.setTextColor(CD_WHITE);
-    tft.setTextDatum(MC_DATUM);
-    tft.setTextSize(3);
-    sprintf(buf, "%d", settingPumpDuration);
-    tft.drawString(buf, 160, 156);
-    tft.setTextSize(1);
-    tft.setTextColor(CD_GRAY);
-    tft.drawString("ms", 160, 174);
-    // + 按鈕
-    UIComponents::drawButton(&tft, 258, 136, 50, 40, "+", CD_ESPRESSO);
-    
-    tft.setTextDatum(TL_DATUM);
-    
-    // --- 預估流量資訊 ---
-    tft.fillRect(4, 194, 312, 44, CD_BG);
-    UIComponents::drawCard(&tft, 4, 194, 312, 42);
-    
-    float mlPerCycle = FLOW_RATE_ML_PER_CYCLE * ((float)settingPumpDuration / PUMP_ON_DURATION_MS);
-    float mlPerMin = mlPerCycle * (60.0f / settingDripInterval);
-    int totalCycles = (TARGET_TIME_HOURS * 3600) / settingDripInterval;
-    float totalMl = totalCycles * mlPerCycle;
-    
-    tft.setTextColor(CD_GRAY);
-    tft.setTextSize(1);
-    sprintf(buf, "Flow: %.2f ml/min", mlPerMin);
-    tft.drawString(buf, 12, 200);
-    sprintf(buf, "Cycles: %d", totalCycles);
-    tft.drawString(buf, 160, 200);
-    
-    tft.setTextColor(CD_WATER_BLUE);
-    sprintf(buf, "Est. Total: %.0f ml / %dhr", totalMl, TARGET_TIME_HOURS);
-    tft.drawString(buf, 12, 218);
-
-    // --- 編碼器焦點提示 ---
-    if (settingsFocus == 0) {
-        tft.drawRoundRect(4, 30, 312, 76, 4, CD_WATER_BLUE);
-        tft.drawRoundRect(5, 31, 310, 74, 4, CD_WATER_BLUE);
-    } else if (settingsFocus == 1) {
-        tft.drawRoundRect(4, 112, 312, 76, 4, CD_WATER_BLUE);
-        tft.drawRoundRect(5, 113, 310, 74, 4, CD_WATER_BLUE);
-    }
-}
-
-// ============================================================
-// 觸控處理
-// ============================================================
-void handleMainTouch(int tx, int ty) {
-    BrewState state = engine.getState();
-    
-    // 頁面切換 - 設定頁
-    if (ty < 26 && tx >= 78 && tx < 148) {
-        currentPage = PAGE_SETTINGS;
-        drawSettingsPage();
-        return;
-    }
-    
-    // 按鈕區域 (y: 206~236)
-    if (ty >= 206 && ty <= 236) {
-        switch (state) {
-            case BREW_IDLE:
-            case BREW_COMPLETE:
-            case BREW_LOW_BATTERY:
-                // START 按鈕 (60~260)
-                if (tx >= 60 && tx <= 260) {
-                    engine.startBrew();
-                    needFullRedraw = true;
-                }
-                break;
-                
-            case BREW_RUNNING:
-                // PAUSE (10~155)
-                if (tx >= 10 && tx <= 155) {
-                    engine.pauseBrew();
-                    needFullRedraw = true;
-                }
-                // STOP (165~310)
-                else if (tx >= 165 && tx <= 310) {
-                    engine.stopBrew();
-                    needFullRedraw = true;
-                }
-                break;
-                
-            case BREW_PAUSED:
-                // RESUME (10~155)
-                if (tx >= 10 && tx <= 155) {
-                    engine.resumeBrew();
-                    needFullRedraw = true;
-                }
-                // STOP (165~310)
-                else if (tx >= 165 && tx <= 310) {
-                    engine.stopBrew();
-                    needFullRedraw = true;
-                }
-                break;
-                
-            case BREW_PURGING:
-                // SKIP (10~155) - 跳過 Air Purge
-                if (tx >= 10 && tx <= 155) {
-                    engine.stopPurge();
-                    needFullRedraw = true;
-                }
-                // STOP (165~310) - 完全停止
-                else if (tx >= 165 && tx <= 310) {
-                    engine.stopBrew();
-                    needFullRedraw = true;
-                }
-                break;
-        }
-    }
-}
-
-void handleSettingsTouch(int tx, int ty) {
-    // 頁面切換 - 主控頁
-    if (ty < 26 && tx >= 4 && tx < 74) {
-        // 套用設定
-        engine.setDripInterval(settingDripInterval);
-        engine.setPumpDuration(settingPumpDuration);
-        currentPage = PAGE_MAIN;
-        needFullRedraw = true;
-        drawMainPage();
-        return;
-    }
-    
-    // --- 滴灌間隔 ---
-    // - 按鈕 (12~62, 54~94)
-    if (tx >= 12 && tx <= 62 && ty >= 54 && ty <= 94) {
-        settingDripInterval -= 10;
-        if (settingDripInterval < 10) settingDripInterval = 10;
-        updateSettingsPage();
-        return;
-    }
-    // + 按鈕 (258~308, 54~94)
-    if (tx >= 258 && tx <= 308 && ty >= 54 && ty <= 94) {
-        settingDripInterval += 10;
-        if (settingDripInterval > 300) settingDripInterval = 300;
-        updateSettingsPage();
-        return;
-    }
-    
-    // --- 幫浦持續時間 ---
-    // - 按鈕 (12~62, 136~176)
-    if (tx >= 12 && tx <= 62 && ty >= 136 && ty <= 176) {
-        settingPumpDuration -= 100;
-        if (settingPumpDuration < 500) settingPumpDuration = 500;
-        updateSettingsPage();
-        return;
-    }
-    // + 按鈕 (258~308, 136~176)
-    if (tx >= 258 && tx <= 308 && ty >= 136 && ty <= 176) {
-        settingPumpDuration += 100;
-        if (settingPumpDuration > 5000) settingPumpDuration = 5000;
-        updateSettingsPage();
-        return;
-    }
-}
-
-// ============================================================
-// Arduino 主程式
-// ============================================================
 void setup() {
     Serial.begin(115200);
-    Serial.println("\n========================================");
-    Serial.println("  Cold Drip Coffee Controller v1.1");
-    Serial.println("  ESP32-CYD | 5V Unified Architecture");
-    Serial.println("========================================\n");
     
-    // 背光
-    pinMode(21, OUTPUT);
-    digitalWrite(21, HIGH);
-    
-    // TFT 初始化
+    // 初始化螢幕
     tft.init();
-    tft.setRotation(3);       // 橫向, USB 在右
-    tft.invertDisplay(true);   // CYD 需要反色
+    tft.setRotation(0);
     tft.fillScreen(CD_BG);
     
-    // 觸控初始化
-    touchSPI.begin(XPT2046_CLK, XPT2046_MISO, XPT2046_MOSI, XPT2046_CS);
-    touch.begin(touchSPI);
-    touch.setRotation(3);
-    
-    // 開機畫面
-    drawSplashScreen();
+    // 初始化編碼器
+    ESP32Encoder::useInternalWeakPullResistors = UP;
+    encoder.attachFullQuad(ENCODER_CLK_PIN, ENCODER_DT_PIN);
+    pinMode(ENCODER_SW_PIN, INPUT); // 外部有分壓電阻，S3 GPIO35 在某些開發板是 ADC
     
     // 初始化引擎
     engine.begin();
     
-    // 初始化編碼器 (EC11)
-    pinMode(ENCODER_CLK_PIN, INPUT_PULLUP);
-    pinMode(ENCODER_DT_PIN, INPUT_PULLUP);
-    pinMode(ENCODER_SW_PIN, INPUT); // GPIO35 外部有分壓電阻
-    attachInterrupt(digitalPinToInterrupt(ENCODER_CLK_PIN), encoderISR, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(ENCODER_DT_PIN), encoderISR, CHANGE);
-    
-    // 繪製主頁面
-    drawMainPage();
-    updateMainPage();
+    // 預設讀取參數
+    BrewStatus st = engine.getStatus();
+    settingDripInterval = st.dripIntervalSec;
+    settingPumpDuration = st.pumpDurationMs;
+
+    Serial.println("System v2.0 Initialized (S3 + GC9A01)");
 }
 
 void loop() {
     unsigned long now = millis();
-    
-    // 更新引擎 (永遠執行)
     engine.update();
     
+    // 處理編碼器與按鈕
+    handleControls();
+
     // 更新顯示
     if (now - lastDisplayUpdate >= DISPLAY_REFRESH_MS) {
         lastDisplayUpdate = now;
+        animFrame++;
         
         if (currentPage == PAGE_MAIN) {
             if (needFullRedraw) {
@@ -621,117 +83,156 @@ void loop() {
             }
             updateMainPage();
         } else if (currentPage == PAGE_SETTINGS) {
-            // 設定頁面只更新電池
-            BrewStatus st = engine.getStatus();
-            tft.fillRect(210, 2, 108, 22, CD_ESPRESSO);
-            UIComponents::drawBatteryIcon(&tft, 210, 5, st.batteryPercent, st.batteryVoltage);
+            if (needFullRedraw) {
+                drawSettingsPage();
+                needFullRedraw = false;
+            }
+            updateSettingsPage();
         }
     }
     
-    // 動畫幀更新
-    if (now - lastAnimFrame >= 200) {
-        lastAnimFrame = now;
-        animFrame++;
-    }
-    
-    // 觸控處理
-    if (touch.touched() && (now - lastTouchTime >= TOUCH_DEBOUNCE_MS)) {
-        lastTouchTime = now;
-        TS_Point p = touch.getPoint();
-        int tx = map(p.x, TOUCH_X_MIN, TOUCH_X_MAX, 0, 320);
-        int ty = map(p.y, TOUCH_Y_MIN, TOUCH_Y_MAX, 0, 240);
-        tx = constrain(tx, 0, 319);
-        ty = constrain(ty, 0, 239);
-        
-        Serial.printf("[Touch] X=%d, Y=%d (Raw: %d, %d)\n", tx, ty, p.x, p.y);
-        
-        if (currentPage == PAGE_MAIN) {
-            handleMainTouch(tx, ty);
-        } else if (currentPage == PAGE_SETTINGS) {
-            handleSettingsTouch(tx, ty);
-        }
-    }
-    
-    // 編碼器處理
-    handleEncoder();
-    
-    delay(10);
+    delay(5);
 }
 
-// ============================================================
-// 編碼器交互邏輯
-// ============================================================
-void handleEncoder() {
-    // 讀取並重置增量
-    noInterrupts();
-    int delta = encoderPos;
-    encoderPos = 0;
-    interrupts();
-    
-    // 讀取按鈕 (Analog 讀取判斷)
-    bool pressed = analogRead(ENCODER_SW_PIN) < 100;
-    static bool lastPressed = false;
+void handleControls() {
     unsigned long now = millis();
     
-    // 處理旋轉
-    if (delta != 0) {
-        lastEncoderAction = now;
+    // 1. 旋轉處理
+    long currentPos = encoder.getCount() / 2; // EC11 通常是 2 或 4 pulse per detent
+    if (currentPos != lastEncoderPos) {
+        int delta = currentPos - lastEncoderPos;
+        lastEncoderPos = currentPos;
+        
         if (currentPage == PAGE_MAIN) {
-            // 主頁面：快速調整滴灌間隔 (±1s * delta)
-            int currentInterval = engine.getStatus().dripIntervalSec;
-            int nextInterval = currentInterval + delta;
-            nextInterval = constrain(nextInterval, 10, 300);
-            if (nextInterval != currentInterval) {
-                engine.setDripInterval(nextInterval);
-                updateMainPage();
-            }
+            // 主頁面：微調滴灌間隔
+            int interval = engine.getStatus().dripIntervalSec + delta;
+            engine.setDripInterval(constrain(interval, 10, 300));
+            needFullRedraw = true; // 更新刻度
         } else if (currentPage == PAGE_SETTINGS) {
-            // 設定頁面：依焦點調整不同參數
+            // 設定頁面：調整數值
             if (settingsFocus == 0) {
-                settingDripInterval += (delta * 1); // 精細調整
-                settingDripInterval = constrain(settingDripInterval, 10, 300);
-                updateSettingsPage();
+                settingDripInterval = constrain(settingDripInterval + delta, 10, 300);
             } else if (settingsFocus == 1) {
-                settingPumpDuration += (delta * 10); // 精細調整
-                settingPumpDuration = constrain(settingPumpDuration, 500, 5000);
-                updateSettingsPage();
-            } else if (settingsFocus == 2) {
-                // 如果在返回按鈕上旋轉，就切換焦點
-                settingsFocus = (delta > 0) ? 0 : 1;
-                updateSettingsPage();
+                settingPumpDuration = constrain(settingPumpDuration + (delta * 50), 500, 5000);
             }
+            updateSettingsPage();
         }
     }
     
-    // 處理按鈕 (下降沿觸發，因為按下時電壓低於閾值)
-    if (pressed && !lastPressed && (now - lastTouchTime >= TOUCH_DEBOUNCE_MS)) {
-        lastTouchTime = now;
+    // 2. 按鈕處理 (Analog 讀取判斷 GPIO35)
+    bool isPressed = analogRead(ENCODER_SW_PIN) < 500; // 按下時接近 0V
+    static bool lastPressed = false;
+    
+    if (isPressed && !lastPressed && (now - lastButtonPressTime > 300)) {
+        lastButtonPressTime = now;
+        
         if (currentPage == PAGE_MAIN) {
-            // 主頁面：點擊切換 萃取/停止
+            // 長按進入設定，短按切換開始/暫停
+            // 簡化版：短按切換狀態，雙擊或未來邏輯可進設定
+            // 目前先用短按切換狀態
             BrewState state = engine.getState();
-            if (state == BREW_IDLE || state == BREW_COMPLETE) {
-                engine.startBrew();
-            } else if (state == BREW_RUNNING) {
-                engine.pauseBrew();
-            } else if (state == BREW_PAUSED) {
-                engine.resumeBrew();
-            }
+            if (state == BREW_IDLE || state == BREW_COMPLETE) engine.startBrew();
+            else if (state == BREW_RUNNING) engine.pauseBrew();
+            else if (state == BREW_PAUSED) engine.resumeBrew();
             needFullRedraw = true;
         } else if (currentPage == PAGE_SETTINGS) {
-            // 設定頁面：切換焦點
             settingsFocus++;
             if (settingsFocus > 2) {
-                // 如果點擊了"返回"區域或是循環到了，則保存並返回
-                // 這裡暫時設定點擊三次回到主頁
+                // 保存並返回
                 engine.setDripInterval(settingDripInterval);
                 engine.setPumpDuration(settingPumpDuration);
                 currentPage = PAGE_MAIN;
-                needFullRedraw = true;
                 settingsFocus = 0;
-            } else {
-                updateSettingsPage();
             }
+            needFullRedraw = true;
         }
     }
-    lastPressed = pressed;
+    lastPressed = isPressed;
+}
+
+// ============================================================
+// UI 繪製邏輯 (圓形優化)
+// ============================================================
+
+void drawMainPage() {
+    tft.fillScreen(CD_BG);
+    // 繪製圓形邊框刻度
+    for (int i = 0; i < 360; i += 30) {
+        float rad = i * DEG_TO_RAD;
+        int x1 = 120 + cos(rad) * 110;
+        int y1 = 120 + sin(rad) * 110;
+        int x2 = 120 + cos(rad) * 118;
+        int y2 = 120 + sin(rad) * 118;
+        tft.drawLine(x1, y1, x2, y2, CD_GRAY);
+    }
+}
+
+void updateMainPage() {
+    BrewStatus st = engine.getStatus();
+    char buf[32];
+    
+    // 1. 中心大型數值: 已萃取量
+    tft.setTextDatum(MC_DATUM);
+    tft.setTextColor(CD_CREAM, CD_BG);
+    tft.setTextSize(4);
+    sprintf(buf, "%.0f", st.estimatedMl);
+    tft.drawString(buf, 120, 100);
+    
+    tft.setTextSize(1);
+    tft.setTextColor(CD_GRAY, CD_BG);
+    tft.drawString("ml extracted", 120, 135);
+    
+    // 2. 進度環 (外圈)
+    float progress = (st.totalCycles > 0) ? (float)st.cycleCount * 100.0f / st.totalCycles : 0;
+    UIComponents::drawArcProgress(&tft, 120, 120, 118, 4, -90, 270, progress, CD_COFFEE);
+    
+    // 3. 狀態文字
+    tft.setTextSize(2);
+    uint16_t stateColor = CD_GRAY;
+    const char* stateStr = "IDLE";
+    if (st.state == BREW_RUNNING) { stateColor = CD_GREEN; stateStr = "BREWING"; }
+    else if (st.state == BREW_PURGING) { stateColor = CD_AMBER; stateStr = "PURGING"; }
+    else if (st.state == BREW_PAUSED) { stateColor = CD_AMBER; stateStr = "PAUSED"; }
+    
+    tft.setTextColor(stateColor, CD_BG);
+    tft.drawString(stateStr, 120, 60);
+    
+    // 4. 電池 (底部)
+    UIComponents::drawCircularBattery(&tft, 120, 120, st.batteryPercent, st.batteryVoltage);
+    
+    // 5. 動畫
+    if (st.pumpActive || st.airPumpActive) {
+        UIComponents::drawCircularDrip(&tft, 120, 120, animFrame);
+    }
+}
+
+void drawSettingsPage() {
+    tft.fillScreen(CD_BG);
+    tft.setTextColor(CD_CREAM);
+    tft.setTextDatum(MC_DATUM);
+    tft.setTextSize(2);
+    tft.drawString("SETTINGS", 120, 40);
+}
+
+void updateSettingsPage() {
+    char buf[32];
+    tft.setTextDatum(MC_DATUM);
+    
+    // 滴灌間隔
+    UIComponents::drawFocusCircle(&tft, 120, 100, 45, settingsFocus == 0);
+    tft.setTextColor(CD_WHITE, CD_BG);
+    tft.setTextSize(3);
+    sprintf(buf, "%d", settingDripInterval);
+    tft.drawString(buf, 120, 100);
+    tft.setTextSize(1);
+    tft.drawString("sec interval", 120, 130);
+    
+    // 幫浦時間
+    UIComponents::drawFocusCircle(&tft, 120, 180, 35, settingsFocus == 1);
+    tft.setTextColor(CD_GRAY, CD_BG);
+    tft.setTextSize(2);
+    sprintf(buf, "%d", settingPumpDuration);
+    tft.drawString(buf, 120, 180);
+    tft.setTextSize(1);
+    tft.drawString("ms duration", 120, 205);
 }
