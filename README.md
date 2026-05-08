@@ -1,7 +1,7 @@
-# ☕ 冰滴咖啡機控制器 (Cold Drip Coffee Controller) v2.0
+# ☕ 冰滴咖啡機控制器 (Cold Drip Coffee Controller) v2.2
 
-> **ESP32-S3 驅動** ｜ 1.28" 圓形 LCD ｜ 實體旋鈕操作
-> **全 5V 統一架構** — 無需升壓模組，電路精簡可靠，腳位充足不需改裝。
+> **ESP32-WROOM-32 驅動** ｜ 1.28" 圓形 LCD ｜ 實體旋鈕操作
+> **全 5V 統一架構** — 使用 XL4015 穩壓、2 路繼電器驅動。
 
 ## 📋 專案概述
 
@@ -9,24 +9,25 @@
 |------|------|
 | **目標產量** | 600ml / 6小時 |
 | **配置** | 左右並列雙槽結構（右側入水、左側萃取） |
-| **控制器** | **ESP32-S3 DevKitC** |
+| **控制器** | **ESP32 DevKit V1 (WROOM-32)** |
 | **顯示器** | **1.28" 圓形 LCD (GC9A01)** |
 | **互動介面** | **EC11 旋轉編碼器 (實體控制)** |
-| **電源架構** | 全 5V 統一供電 |
+| **電源架構** | 全 5V 統一供電 (XL4015 降壓) |
 | **核心邏輯** | 間歇滴灌 + 自動 Air Purge |
 
 ## 🔧 BOM 表 (物料清單)
 
-| 控制器 | **ESP32-S3 DevKitC-1** | 系統核心 (建議 N16R8) |
-| 顯示器 | **1.28" 圓形 LCD (GC9A01)** | 圓形介面資訊顯示 |
-| 旋鈕 | **EC11 旋轉編碼器** | 核心控制與參數調整 |
-| 驅動件 | **2 路繼電器模組 (5V)** | 控制水泵與氣泵 (低電平觸發) |
-| 降壓件 | **5A 帶電壓表降壓模組** | XL4015 晶片，穩定供電與電壓監控 |
-| 水泵 | Kamoer NKP 蠕動幫浦 (**6V**) | 抽水動力 (5V 供電) |
-| 氣泵 | **5V** 小型 Air Pump | 萃取後 Air Purge 吹氣清掃 |
-| 電源 | Eneloop Pro AA 電池 x 4 | 穩定電力來源 (4.8~5.8V) |
-| 管件 | 三通接頭 + 單向閥 x 3 | 完整水路/氣路管理系統 |
-| 結構 | ⌀60 佈水器 + ⌀60 粉槽 | 垂直萃取結構 |
+| 類別 | 項目規格 | 用途 |
+|------|----------|------|
+| 控制器 | **ESP32 DevKit V1** | 核心 CPU (WROOM-32 模組) |
+| 顯示器 | **1.28" 圓形 LCD (GC9A01)** | 圓形資訊顯示 |
+| 旋鈕 | **EC11 旋轉編碼器** | 參數調整與操控 |
+| 驅動件 | **2 路繼電器模組 (5V)** | 控制馬達開關 (低電平觸發) |
+| 降壓件 | **XL4015 降壓模組 (CV/CC)** | 將電池電壓降至穩定的 5V |
+| 水泵 | Kamoer NKP 蠕動幫浦 (**6V**) | 精準滴灌動力 |
+| 氣泵 | **5V** 微型氣泵 | Air Purge 清掃管路 |
+| 電源 | Eneloop Pro AA 電池 x 4 | 4.8V~5.8V 穩定動力源 |
+| 管件 | 三通接頭 + 單向閥 x 3 | 完整防逆流水路系統 |
 | 管件 | 三通接頭 (3mm) × 1 | 水泵/氣泵管路匯流 |
 | 管件 | 單向閥 (3mm) × 3 | 防止逆流，確保流向正確 |
 | 耗材 | 3mm 食品級矽膠管 (FDA/NSF) | 水路與氣路管線 |
@@ -38,22 +39,22 @@
 
 ![5V 統一架構配線圖](docs/wiring_diagram.png)
 
-### GPIO 分配 (v2.1)
+### GPIO 分配 (v2.2 - ESP32 WROOM)
 
-| GPIO | 功能 | 介面 | 接往 |
+| GPIO | 功能 | 介面 | 說明 |
 |------|------|------|------|
-| **GPIO 1** | Encoder CLK | INPUT | EC11 CLK |
-| **GPIO 2** | Encoder DT | INPUT | EC11 DT |
-| **GPIO 3** | Encoder SW | INPUT | EC11 SW (按鈕) |
-| **GPIO 4** | 水泵控制 | OUTPUT | 繼電器 IN1 (低電平觸發) |
-| **GPIO 5** | 氣泵控制 | OUTPUT | 繼電器 IN2 (低電平觸發) |
-| **GPIO 6** | 電壓監測 | ADC | 降壓模組輸出端 (經分壓) |
-| **GPIO 10** | LCD SCL | SPI SCK | GC9A01 SCL |
-| **GPIO 11** | LCD SDA | SPI MOSI | GC9A01 SDA |
-| **GPIO 12** | LCD RES | RESET | GC9A01 RES |
-| **GPIO 13** | LCD DC | DATA/CMD | GC9A01 DC |
-| **GPIO 14** | LCD CS | CHIP SEL | GC9A01 CS |
-| **GPIO 15** | LCD BLK | BACKLIGHT | GC9A01 BLK |
+| **GPIO 32** | Encoder CLK | INPUT | EC11 CLK |
+| **GPIO 33** | Encoder DT | INPUT | EC11 DT |
+| **GPIO 35** | Encoder SW | INPUT | EC11 按鈕 (Input Only) |
+| **GPIO 34** | 電壓監測 | ADC | 5V 分壓輸入 (Input Only) |
+| **GPIO 25** | 水泵控制 | OUTPUT | 繼電器 IN1 (低電平觸發) |
+| **GPIO 26** | 氣泵控制 | OUTPUT | 繼電器 IN2 (低電平觸發) |
+| **GPIO 18** | LCD SCL | SPI SCK | VSPI SCK |
+| **GPIO 23** | LCD SDA | SPI MOSI | VSPI MOSI |
+| **GPIO 5** | LCD CS | CHIP SEL | VSPI CS |
+| **GPIO 2** | LCD DC | DATA/CMD | 數據指令切換 |
+| **GPIO 4** | LCD RES | RESET | 螢幕重設 |
+| **GPIO 15** | LCD BLK | BACKLIGHT | 背光控制 |
 | 5V | 電源輸入 | Power | 降壓模組 OUT+ |
 | GND | 共地 | GND | 所有模組共地 |
 
@@ -82,22 +83,19 @@ ESP32 GPIO22 → D4184 #2 SIG (氣泵開關)
 | 5 | 🟡 | 5V 匯流排 | 繼電器 VCC | 繼電器模組電源 |
 | 6 | 🟡 | 5V 匯流排 | 繼電器 COM1 / COM2 | 馬達動力源 (公用) |
 | 7 | ⚫ | 降壓模組 OUT- | GND 匯流排 | 系統共地 |
-| 8 | 🔵 | 5V 匯流排 (經分壓) | GPIO 6 | 電壓監測 ADC |
-| 9 | 🟢 | GPIO 1 | EC11 CLK | 編碼器訊號 A |
-| 10| 🟠 | GPIO 2 | EC11 DT | 編碼器訊號 B |
-| 11| ⚪ | GPIO 3 | EC11 SW | 編碼器按鈕 |
+| 8 | 🔵 | 5V 匯流排 (經分壓) | GPIO 34 | 電池電壓監測 |
+| 9 | 🟢 | GPIO 32 | EC11 CLK | 編碼器訊號 A |
+| 10| 🟠 | GPIO 33 | EC11 DT | 編碼器訊號 B |
+| 11| ⚪ | GPIO 35 | EC11 SW | 編碼器按鈕 |
 | 12| 🔴 | ESP32 3.3V | EC11 (+) | 編碼器電源 |
-| 13| 🟣 | GPIO 4 | 繼電器 IN1 | 水泵啟動訊號 |
-| 14| 🟣 | GPIO 5 | 繼電器 IN2 | 氣泵啟動訊號 |
-| 15| 🌊 | GPIO 10-14 | LCD SPI | 圓形螢幕數據線 |
+| 13| 🟣 | GPIO 25 | 繼電器 IN1 | 水泵啟動訊號 |
+| 14| 🟣 | GPIO 26 | 繼電器 IN2 | 氣泵啟動訊號 |
+| 15| 🌊 | GPIO 18, 23 | LCD SPI | 螢幕 SCL, SDA |
 | 16| ⚡ | ESP32 3.3V | LCD VCC | 螢幕電源 |
-| 17| 🟣 | 繼電器 NO1 | 水泵 (+) | 水泵受控端 |
-| 18| 🟣 | 繼電器 NO2 | 氣泵 (+) | 氣泵受控端 |
+| 17| 🟣 | GPIO 5, 2, 4 | LCD 控制 | CS, DC, RES 線 |
+| 18| 🟣 | 繼電器 NO1/2 | 馬達正極 | 水泵與氣泵動力 |
 
-> 💡 **v2.1 改進重點**：
-> 1. 使用 **繼電器** 代替 MOSFET，接線更穩固且具備物理隔離。
-> 2. 降壓模組自帶 **電壓表**，方便即時觀察電池與系統狀態。
-> 3. **低電平觸發控制**：請確保程式碼中的控制邏輯已反轉（LOW=開啟）。
+> 💡 **v2.2 調整重點**：使用經典的 **ESP32-WROOM-32**。請注意 WROOM 的 GPIO 34/35 僅能作為輸入，不可驅動繼電器或 LED。SPI 則固定使用硬體 VSPI 腳位以獲得最佳顯示效能。
 
 > 💡 **不需要 MT3608 升壓模組！** 所有動力元件統一由 5V 降壓輸出供電。
 
