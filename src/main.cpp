@@ -153,6 +153,7 @@ void updateMainPage() {
         case BREW_IDLE:        stateStr = "STANDBY";   stateColor = CD_GRAY; break;
         case BREW_RUNNING:     stateStr = "BREWING";   stateColor = CD_GREEN; break;
         case BREW_PAUSED:      stateStr = "PAUSED";    stateColor = CD_AMBER; break;
+        case BREW_PURGING:     stateStr = "PURGING";   stateColor = CD_AMBER; break;
         case BREW_COMPLETE:    stateStr = "COMPLETE";  stateColor = CD_WATER_BLUE; break;
         case BREW_LOW_BATTERY: stateStr = "LOW BATT!"; stateColor = CD_RED; break;
         default:               stateStr = "---";       stateColor = CD_GRAY; break;
@@ -160,7 +161,7 @@ void updateMainPage() {
     
     // 狀態指示燈
     tft.fillCircle(20, 50, 6, stateColor);
-    if (st.state == BREW_RUNNING) {
+    if (st.state == BREW_RUNNING || st.state == BREW_PURGING) {
         // 呼吸燈效果
         int brightness = abs((int)(millis() / 10) % 200 - 100);
         if (brightness > 50) {
@@ -173,13 +174,23 @@ void updateMainPage() {
     tft.setTextSize(2);
     tft.drawString(stateStr, 34, 38);
     
-    // 幫浦指示
+    // 幫浦/氣泵指示
     if (st.pumpActive) {
         tft.setTextColor(CD_WATER_BLUE);
         tft.setTextSize(1);
         tft.drawString("PUMP ON", 34, 60);
         // 滴水動畫
         UIComponents::drawDripIcon(&tft, 290, 36, animFrame);
+    } else if (st.airPumpActive) {
+        tft.setTextColor(CD_AMBER);
+        tft.setTextSize(1);
+        tft.drawString("AIR PUMP ON", 34, 60);
+        // 顯示氣泵剩餘時間
+        char purgeBuf[16];
+        int purgeRemain = (st.purgeTotalMs - st.purgeElapsedMs) / 1000;
+        if (purgeRemain < 0) purgeRemain = 0;
+        sprintf(purgeBuf, "%ds left", purgeRemain);
+        tft.drawString(purgeBuf, 140, 60);
     } else if (st.state == BREW_RUNNING) {
         tft.setTextColor(CD_DARK_GRAY);
         tft.setTextSize(1);
@@ -188,19 +199,29 @@ void updateMainPage() {
         tft.drawString(buf, 34, 60);
     }
     
-    // 進度條 (狀態卡底部)
-    float progress = 0;
-    if (st.totalCycles > 0) {
-        progress = (float)st.cycleCount / st.totalCycles * 100.0f;
+    // 進度條
+    if (st.state == BREW_PURGING) {
+        // Air Purge 專用進度條
+        float purgeProgress = (float)st.purgeElapsedMs / st.purgeTotalMs * 100.0f;
+        if (purgeProgress > 100.0f) purgeProgress = 100.0f;
+        UIComponents::drawProgressBar(&tft, 10, 72, 300, 8, purgeProgress, CD_AMBER);
+        tft.setTextColor(CD_AMBER);
+        tft.setTextSize(1);
+        sprintf(buf, "%.0f%%", purgeProgress);
+        tft.drawString(buf, 268, 60);
+    } else {
+        // 一般萃取進度條
+        float progress = 0;
+        if (st.totalCycles > 0) {
+            progress = (float)st.cycleCount / st.totalCycles * 100.0f;
+        }
+        UIComponents::drawProgressBar(&tft, 10, 72, 300, 8, progress, 
+            st.state == BREW_COMPLETE ? CD_GREEN : CD_WATER_BLUE);
+        tft.setTextColor(CD_CREAM);
+        tft.setTextSize(1);
+        sprintf(buf, "%.1f%%", progress);
+        tft.drawString(buf, 268, 60);
     }
-    UIComponents::drawProgressBar(&tft, 10, 72, 300, 8, progress, 
-        st.state == BREW_COMPLETE ? CD_GREEN : CD_WATER_BLUE);
-    
-    // 進度百分比
-    tft.setTextColor(CD_CREAM);
-    tft.setTextSize(1);
-    sprintf(buf, "%.1f%%", progress);
-    tft.drawString(buf, 268, 60);
     
     // --- 已萃取 ---
     tft.fillRoundRect(6, 92, 149, 42, 4, CD_BG_CARD);
@@ -277,6 +298,12 @@ void drawMainButtons(BrewState state) {
         case BREW_PAUSED:
             // 顯示「繼續」和「停止」
             UIComponents::drawButton(&tft, 10, 206, 145, 30, "RESUME", CD_BTN_START);
+            UIComponents::drawButton(&tft, 165, 206, 145, 30, "STOP", CD_BTN_STOP);
+            break;
+            
+        case BREW_PURGING:
+            // 顯示「跳過」和「停止」
+            UIComponents::drawButton(&tft, 10, 206, 145, 30, "SKIP", CD_AMBER);
             UIComponents::drawButton(&tft, 165, 206, 145, 30, "STOP", CD_BTN_STOP);
             break;
     }
@@ -438,6 +465,19 @@ void handleMainTouch(int tx, int ty) {
                     needFullRedraw = true;
                 }
                 // STOP (165~310)
+                else if (tx >= 165 && tx <= 310) {
+                    engine.stopBrew();
+                    needFullRedraw = true;
+                }
+                break;
+                
+            case BREW_PURGING:
+                // SKIP (10~155) - 跳過 Air Purge
+                if (tx >= 10 && tx <= 155) {
+                    engine.stopPurge();
+                    needFullRedraw = true;
+                }
+                // STOP (165~310) - 完全停止
                 else if (tx >= 165 && tx <= 310) {
                     engine.stopBrew();
                     needFullRedraw = true;

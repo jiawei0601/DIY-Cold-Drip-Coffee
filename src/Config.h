@@ -8,7 +8,12 @@
 
 // --- 幫浦控制 (Kamoer NKP via D4184 MOSFET) ---
 // CYD 可用 GPIO: 27, 22 (未被螢幕/觸控佔用)
-#define PUMP_PIN            27      // D4184 MOSFET 訊號腳位
+#define PUMP_PIN            27      // D4184 MOSFET #1 訊號腳位 (水泵)
+
+// --- 氣泵控制 (12V Air Pump via D4184 MOSFET #2) ---
+#define AIR_PUMP_PIN        22      // D4184 MOSFET #2 訊號腳位 (氣泵)
+#define AIR_PURGE_DURATION_MS 30000 // Air Purge 持續時間 (毫秒, 預設 30 秒)
+#define AIR_PURGE_ENABLED   true    // 萃取完成後自動執行 Air Purge
 
 // --- 電量監測 (分壓電阻: 100kΩ / 10kΩ) ---
 // ADC 腳位: GPIO35 (ADC1_CH7, 僅輸入, 不與觸控衝突)

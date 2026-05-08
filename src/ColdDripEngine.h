@@ -13,7 +13,8 @@ enum BrewState {
     BREW_IDLE,       // 待機中
     BREW_RUNNING,    // 萃取進行中
     BREW_PAUSED,     // 暫停中
-    BREW_COMPLETE,   // 萃取完成
+    BREW_PURGING,    // Air Purge 吹氣清掃中
+    BREW_COMPLETE,   // 全部完成 (含清掃)
     BREW_LOW_BATTERY // 低電量停機
 };
 
@@ -27,8 +28,11 @@ struct BrewStatus {
     float batteryVoltage;           // 電池電壓
     int batteryPercent;             // 電池百分比
     bool pumpActive;                // 幫浦是否正在運轉
+    bool airPumpActive;             // 氣泵是否正在運轉
     int dripIntervalSec;            // 當前滴灌間隔
     int pumpDurationMs;             // 當前幫浦持續時間
+    unsigned long purgeElapsedMs;   // Air Purge 已經過時間
+    unsigned long purgeTotalMs;     // Air Purge 總時間
 };
 
 class ColdDripEngine {
@@ -54,10 +58,16 @@ public:
     float getBatteryVoltage();
     int getBatteryPercent();
     bool isPumpOn() { return _pumpOn; }
+    bool isAirPumpOn() { return _airPumpOn; }
+    
+    // Air Purge 控制
+    void startPurge();
+    void stopPurge();
     
 private:
     BrewState _state;
     bool _pumpOn;
+    bool _airPumpOn;
     
     // 時間追蹤
     unsigned long _brewStartMs;
@@ -66,6 +76,7 @@ private:
     unsigned long _lastDripMs;
     unsigned long _pumpStartMs;
     unsigned long _lastBatteryReadMs;
+    unsigned long _purgeStartMs;
     
     // 萃取參數
     int _dripIntervalSec;
@@ -83,6 +94,8 @@ private:
     void _readBattery();
     void _pumpOn_();
     void _pumpOff();
+    void _airPumpOn_();
+    void _airPumpOff();
     void _checkSafety();
     float _rawAdcToVoltage(int raw);
 };
@@ -92,9 +105,10 @@ private:
 // ============================================================
 
 ColdDripEngine::ColdDripEngine()
-    : _state(BREW_IDLE), _pumpOn(false),
+    : _state(BREW_IDLE), _pumpOn(false), _airPumpOn(false),
       _brewStartMs(0), _pauseStartMs(0), _totalPausedMs(0),
       _lastDripMs(0), _pumpStartMs(0), _lastBatteryReadMs(0),
+      _purgeStartMs(0),
       _dripIntervalSec(DRIP_INTERVAL_SEC),
       _pumpDurationMs(PUMP_ON_DURATION_MS),
       _cycleCount(0), _batteryVoltage(0), _batteryPercent(0),
@@ -108,6 +122,9 @@ ColdDripEngine::ColdDripEngine()
 void ColdDripEngine::begin() {
     pinMode(PUMP_PIN, OUTPUT);
     digitalWrite(PUMP_PIN, LOW);  // 確保幫浦初始關閉
+    
+    pinMode(AIR_PUMP_PIN, OUTPUT);
+    digitalWrite(AIR_PUMP_PIN, LOW);  // 確保氣泵初始關閉
     
     // 設定 ADC
     analogReadResolution(12);
@@ -137,9 +154,20 @@ void ColdDripEngine::update() {
     // 安全檢查
     _checkSafety();
     
+    // --- Air Purge 控制邏輯 ---
+    if (_state == BREW_PURGING) {
+        if (now - _purgeStartMs >= AIR_PURGE_DURATION_MS) {
+            _airPumpOff();
+            _state = BREW_COMPLETE;
+            Serial.println("[ColdDrip] Air Purge 完成！");
+        }
+        return;
+    }
+    
     if (_state != BREW_RUNNING) {
-        // 確保非運作狀態時幫浦關閉
+        // 確保非運作狀態時幫浦與氣泵關閉
         if (_pumpOn) _pumpOff();
+        if (_airPumpOn) _airPumpOff();
         return;
     }
     
@@ -158,8 +186,14 @@ void ColdDripEngine::update() {
     
     if (activeMs >= totalTargetMs || _cycleCount >= _totalCycles) {
         _pumpOff();
-        _state = BREW_COMPLETE;
-        Serial.println("[ColdDrip] 萃取完成！");
+        if (AIR_PURGE_ENABLED) {
+            // 自動進入 Air Purge
+            startPurge();
+            Serial.println("[ColdDrip] 萃取完成，開始 Air Purge...");
+        } else {
+            _state = BREW_COMPLETE;
+            Serial.println("[ColdDrip] 萃取完成！");
+        }
         return;
     }
     
@@ -195,11 +229,26 @@ void ColdDripEngine::startBrew() {
 
 void ColdDripEngine::stopBrew() {
     _pumpOff();
+    _airPumpOff();
     _state = BREW_IDLE;
     _cycleCount = 0;
     _brewStartMs = 0;
     _totalPausedMs = 0;
     Serial.println("[ColdDrip] 萃取已停止");
+}
+
+void ColdDripEngine::startPurge() {
+    _pumpOff();  // 確保水泵關閉
+    _state = BREW_PURGING;
+    _purgeStartMs = millis();
+    _airPumpOn_();
+    Serial.printf("[ColdDrip] Air Purge 啟動，持續 %d 秒\n", AIR_PURGE_DURATION_MS / 1000);
+}
+
+void ColdDripEngine::stopPurge() {
+    _airPumpOff();
+    _state = BREW_COMPLETE;
+    Serial.println("[ColdDrip] Air Purge 手動停止");
 }
 
 void ColdDripEngine::pauseBrew() {
@@ -238,14 +287,22 @@ BrewStatus ColdDripEngine::getStatus() {
     s.batteryVoltage = _batteryVoltage;
     s.batteryPercent = _batteryPercent;
     s.pumpActive = _pumpOn;
+    s.airPumpActive = _airPumpOn;
     s.cycleCount = _cycleCount;
     s.totalCycles = _totalCycles;
     s.dripIntervalSec = _dripIntervalSec;
     s.pumpDurationMs = _pumpDurationMs;
+    s.purgeTotalMs = AIR_PURGE_DURATION_MS;
+    
+    if (_state == BREW_PURGING) {
+        s.purgeElapsedMs = millis() - _purgeStartMs;
+    } else {
+        s.purgeElapsedMs = 0;
+    }
     
     s.totalMs = (unsigned long)TARGET_TIME_HOURS * 3600UL * 1000UL;
     
-    if (_state == BREW_RUNNING || _state == BREW_PAUSED || _state == BREW_COMPLETE) {
+    if (_state == BREW_RUNNING || _state == BREW_PAUSED || _state == BREW_COMPLETE || _state == BREW_PURGING) {
         unsigned long now = millis();
         unsigned long pauseOffset = _totalPausedMs;
         if (_state == BREW_PAUSED) {
@@ -303,10 +360,23 @@ void ColdDripEngine::_pumpOff() {
     Serial.println("[ColdDrip] 幫浦 OFF");
 }
 
+void ColdDripEngine::_airPumpOn_() {
+    digitalWrite(AIR_PUMP_PIN, HIGH);
+    _airPumpOn = true;
+    Serial.println("[ColdDrip] 氣泵 ON");
+}
+
+void ColdDripEngine::_airPumpOff() {
+    digitalWrite(AIR_PUMP_PIN, LOW);
+    _airPumpOn = false;
+    Serial.println("[ColdDrip] 氣泵 OFF");
+}
+
 void ColdDripEngine::_checkSafety() {
     if (_batteryVoltage > 0 && _batteryVoltage < BATTERY_CUTOFF_V) {
-        if (_state == BREW_RUNNING || _state == BREW_PAUSED) {
+        if (_state == BREW_RUNNING || _state == BREW_PAUSED || _state == BREW_PURGING) {
             _pumpOff();
+            _airPumpOff();
             _state = BREW_LOW_BATTERY;
             Serial.printf("[ColdDrip] ⚠️ 低電量停機保護! 電壓: %.2fV\n", _batteryVoltage);
         }

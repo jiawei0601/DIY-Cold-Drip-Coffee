@@ -18,10 +18,11 @@
 |------|----------|------|
 | 控制器 | ESP32 CYD (ESP32-2432S028) | 系統大腦與資訊顯示 |
 | 執行器 | Kamoer NKP 幫浦 (12V / BPT管) | 精準抽水，耐磨損 |
+| 執行器 | 12V 小型 Air Pump 氣泵 | 萃取後 Air Purge 吹氣清掃 |
 | 電源 | Eneloop Pro AA 電池 x 4 | 穩定、耐低溫電力來源 |
-| 電壓轉換 | MT3608 升壓模組 (升至 12V) | 驅動幫浦專用 |
+| 電壓轉換 | MT3608 升壓模組 (升至 12V) | 驅動幫浦與氣泵 |
 | 降壓件 | DC-DC 降壓模組 (降至 5V) | 供應 ESP32 運作 |
-| 驅動件 | D4184 MOSFET 模組 | 隔離控制與動力電路 |
+| 驅動件 | D4184 MOSFET 模組 **x 2** | 分別控制水泵與氣泵 |
 | 監測件 | 分壓電阻 (100kΩ / 10kΩ) | 實現電量百分比監測 |
 | 耗材 | 3mm 食品級矽膠管 | 跨接兩側槽體之水路 |
 | 結構 | PETG 3D 列印密封基座 | 防水、防潮、低重心設計 |
@@ -34,7 +35,8 @@
 
 | GPIO | 功能 | 方向 | 接往 |
 |------|------|------|------|
-| **GPIO27** | 幫浦控制 | OUTPUT | D4184 MOSFET SIG |
+| **GPIO27** | 水泵控制 | OUTPUT | D4184 MOSFET #1 SIG |
+| **GPIO22** | 氣泵控制 (Air Pump) | OUTPUT | D4184 MOSFET #2 SIG |
 | **GPIO35** | 電壓監測 (ADC1_CH7) | INPUT | 分壓電阻中間點 |
 | 5V | 電源輸入 | - | DC-DC 降壓 VOUT+ |
 | GND | 共地 | - | 所有模組共地匯流排 |
@@ -42,7 +44,8 @@
 ### 接線重點
 
 ```
-電池 (+) ──┬── MT3608 升壓 → 12V → D4184 → Kamoer NKP 幫浦
+電池 (+) ──┬── MT3608 升壓 → 12V ─┬─ D4184 #1 → Kamoer NKP 水泵
+           │                  └─ D4184 #2 → Air Pump 氣泵
            ├── DC-DC 降壓 → 5V → ESP32 CYD
            └── 分壓電阻 (100kΩ + 10kΩ) → GPIO35 (ADC)
 ```
@@ -50,11 +53,11 @@
 ## 🖥️ 操作介面
 
 ### 主控頁面
-- **狀態指示**: STANDBY / BREWING / PAUSED / COMPLETE / LOW BATT!
+- **狀態指示**: STANDBY / BREWING / PAUSED / PURGING / COMPLETE / LOW BATT!
 - **即時數據**: 已萃取量、已耗時、剩餘量、剩餘時間
-- **進度條**: 萃取完成百分比
+- **進度條**: 萃取/Air Purge 完成百分比
 - **電池監測**: 電壓與百分比顯示
-- **控制按鈕**: START / PAUSE / RESUME / STOP
+- **控制按鈕**: START / PAUSE / RESUME / SKIP / STOP
 
 ### 設定頁面
 - **滴灌間隔**: 10~300 秒，每次調整 ±10 秒
